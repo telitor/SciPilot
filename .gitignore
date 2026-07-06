@@ -1,0 +1,40 @@
+# Environment files
+.env
+.env.*
+!.env.example
+.env.local
+frontend/.env.local
+backend/.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+backend/.venv/
+.venv/
+
+# FastAPI / Uvicorn
+*.log
+
+# Node / Frontend
+node_modules/
+.next/
+dist/
+build/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Supabase local files
+.supabase/
+
+# IDE
+.vscode/
+.idea/
+
+# System files
+.DS_Store
+Thumbs.db
