@@ -2,7 +2,7 @@
 
 <br/>
 
-# ✨ SciCopilot
+# ✨ SciPilot
 
 ### 🧠 面向软件工程学科的智能体学习与项目辅助平台
 
@@ -12,7 +12,7 @@
 
 <br/>
 
-![SciCopilot](https://img.shields.io/badge/SciCopilot-v0.1%20MVP-6C63FF?style=for-the-badge)
+![SciPilot](https://img.shields.io/badge/SciCopilot-v0.1%20MVP-6C63FF?style=for-the-badge)
 ![Status](https://img.shields.io/badge/Status-Initial%20Development-FFB000?style=for-the-badge)
 ![Supabase](https://img.shields.io/badge/Supabase-Database%20%26%20Auth-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-Backend-009688?style=for-the-badge&logo=fastapi&logoColor=white)
@@ -33,7 +33,7 @@
 
 ## 🌌 Project Overview
 
-**SciCopilot** 是一个面向软件工程学科的智能体平台，目标是为论文阅读、代码理解、项目规划等学习与开发场景提供专业 AI 支持。
+**SciPilot** 是一个面向软件工程学科的智能体平台，目标是为论文阅读、代码理解、项目规划等学习与开发场景提供专业 AI 支持。
 
 它不是一个简单的通用聊天机器人，而是一个逐步扩展的垂直领域平台：
 
@@ -54,7 +54,7 @@
 当前版本：
 
 ```text
-SciCopilot v0.1 MVP
+SciPilot v0.1 MVP
 ```
 
 第一版先不追求复杂功能堆叠，而是先完成一个稳定、清晰、可继续扩展的基础闭环。
@@ -279,7 +279,7 @@ GET /
 ```json
 {
   "status": "ok",
-  "service": "SciCopilot Backend"
+  "service": "SciPilot Backend"
 }
 ```
 
@@ -350,7 +350,7 @@ POST /chat
 ## 📁 Project Structure
 
 ```text
-SciCopilot/
+SciPilot/
 │
 ├── backend/
 │   ├── main.py
@@ -409,7 +409,7 @@ service_role key 只能放后端
 ### Clone Repository
 
 ```bash
-git clone https://github.com/telitor/SciCopilot.git
+git clone https://github.com/telitor/SciPilot.git
 cd SciCopilot
 ```
 
