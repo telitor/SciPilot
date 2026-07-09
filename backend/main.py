@@ -221,12 +221,11 @@ def chat(
     # 2. 检查 agent 是否存在
     agent = (
         supabase.table("agents")
-        .select("id,name,system_prompt")
+        .select("id,name,system_prompt,category")
         .eq("id", payload.agent_id)
         .eq("is_public", True)
         .execute()
     )
-
     if not agent.data:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -247,7 +246,12 @@ def chat(
 
     # 4. 调用大模型或临时测试回复
     try:
-        reply = generate_reply(system_prompt, payload.message)
+        reply = generate_reply(
+            system_prompt=system_prompt,
+            user_message=payload.message,
+            agent_category=agent.data[0].get("category", ""),
+            user_id=user.id,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM call failed: {str(e)}")
 

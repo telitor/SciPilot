@@ -1,6 +1,9 @@
 import os
+
 from dotenv import load_dotenv
 from openai import OpenAI
+
+from services.xunfei_agent_service import call_paper_reading_agent
 
 load_dotenv()
 
@@ -9,18 +12,16 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 LLM_MODEL = os.getenv("LLM_MODEL")
 
 
-def generate_reply(system_prompt: str, user_message: str) -> str:
+def call_default_llm(system_prompt: str, user_message: str) -> str:
     """
-    第一版先支持两种情况：
-
-    1. 如果 .env 配置了 LLM_API_KEY，就调用真实大模型。
-    2. 如果还没有配置 LLM_API_KEY，就返回一个临时测试回复，先保证接口流程跑通。
+    默认大模型调用。
+    如果没有配置 LLM_API_KEY，则返回临时测试回复。
     """
 
     if not LLM_API_KEY:
         return (
             "这是 SciCopilot 后端的临时测试回复。"
-            "目前 /chat 接口已经收到你的消息，并完成了后端流程测试。"
+            "当前智能体还没有接入真实模型。"
             f"你刚才发送的内容是：{user_message}"
         )
 
@@ -45,3 +46,31 @@ def generate_reply(system_prompt: str, user_message: str) -> str:
     )
 
     return response.choices[0].message.content
+
+
+def generate_reply(
+    system_prompt: str,
+    user_message: str,
+    agent_category: str = "",
+    user_id: str = "",
+) -> str:
+    """
+    根据 agent 类型选择调用方式。
+
+    paper-reading:
+        调用讯飞星辰论文精读 Agent。
+
+    其他类型:
+        暂时调用默认 LLM 或 mock 回复。
+    """
+
+    if agent_category == "paper-reading":
+        return call_paper_reading_agent(
+            user_id=user_id,
+            user_message=user_message,
+        )
+
+    return call_default_llm(
+        system_prompt=system_prompt,
+        user_message=user_message,
+    )
