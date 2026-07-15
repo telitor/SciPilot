@@ -2,7 +2,13 @@
 import { Upload, Send, FileText, BookOpen, Quote, Loader2, X } from 'lucide-react';
 import { usePaperStore } from '@/store/paperStore';
 import { useUIStore } from '@/store/uiStore';
-import { agentAPI, conversationAPI, getErrorMessage, paperAPI } from '@/services/api';
+import {
+  agentAPI,
+  conversationAPI,
+  getErrorMessage,
+  paperAPI,
+  PAPER_ANALYSIS_TIMEOUT_MESSAGE,
+} from '@/services/api';
 import type { Citation } from '@/types';
 
 interface ChatMessage {
@@ -250,7 +256,7 @@ function PaperRead() {
       setUploadProgress(100);
       addNotification({ type: 'success', message: '论文解析完成', duration: 3000 });
     } catch (error) {
-      const errorMessage = getErrorMessage(error);
+      const errorMessage = getErrorMessage(error, PAPER_ANALYSIS_TIMEOUT_MESSAGE);
       addNotification({
         type: 'error',
         message: errorMessage.includes('论文解析超时')

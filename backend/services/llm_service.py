@@ -3,7 +3,7 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from services.xunfei_agent_service import call_paper_reading_agent
+from services.xunfei_agent_service import call_agent_by_category
 
 load_dotenv()
 
@@ -64,10 +64,18 @@ def generate_reply(
         暂时调用默认 LLM 或 mock 回复。
     """
 
-    if agent_category == "paper-reading":
-        return call_paper_reading_agent(
+    xunfei_agent_categories = {
+        "paper-reading",
+        "problem-decomposition",
+        "result-interpretation",
+        "code-reproduction",
+    }
+
+    if agent_category in xunfei_agent_categories:
+        return call_agent_by_category(
             user_id=user_id,
             user_message=user_message,
+            agent_category=agent_category,
         )
 
     return call_default_llm(

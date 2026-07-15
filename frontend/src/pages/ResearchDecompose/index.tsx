@@ -1,8 +1,20 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Search, ChevronDown, ChevronRight, BookOpen, Database, ArrowRight, Loader2 } from 'lucide-react';
-import { mockAPI } from '@/services/api';
+import { agentAPI, conversationAPI, getErrorMessage } from '@/services/api';
 import { useUIStore } from '@/store/uiStore';
-import type { ResearchNode } from '@/types';
+import type { ResearchNode, ResearchTree } from '@/types';
+
+type AgentItem = {
+  id: string;
+  name?: string;
+  category?: string;
+};
+
+type ChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+};
 
 function FeasibilityBadge({ level }: { level: 'high' | 'medium' | 'low' }) {
   const config = {
@@ -26,7 +38,6 @@ function TreeNode({
 
   return (
     <div className="relative">
-      {/* Connector lines */}
       {depth > 0 && (
         <div
           className="absolute left-0 top-0 bottom-0 w-px bg-sci-border"
@@ -75,16 +86,16 @@ function TreeNode({
               <div>
                 <p className="text-xs text-sci-muted mb-1">相关数据集</p>
                 <div className="flex flex-wrap gap-1">
-                  {node.datasets.map((d) => (
-                    <span key={d} className="sci-badge-info text-[10px]">{d}</span>
+                  {node.datasets.map((dataset) => (
+                    <span key={dataset} className="sci-badge-info text-[10px]">{dataset}</span>
                   ))}
                 </div>
               </div>
               <div>
                 <p className="text-xs text-sci-muted mb-1">相关论文</p>
                 <div className="flex flex-wrap gap-1">
-                  {node.papers.map((p) => (
-                    <span key={p} className="sci-badge-purple text-[10px]">{p}</span>
+                  {node.papers.map((paper) => (
+                    <span key={paper} className="sci-badge-purple text-[10px]">{paper}</span>
                   ))}
                 </div>
               </div>
@@ -100,35 +111,141 @@ function TreeNode({
   );
 }
 
+function extractJsonObject(text: string): unknown | null {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+function normalizeResearchTree(value: unknown): ResearchTree | null {
+  if (!value || typeof value !== 'object') return null;
+  const data = value as Partial<ResearchTree>;
+  if (typeof data.core_question !== 'string' || !Array.isArray(data.sub_questions)) {
+    return null;
+  }
+  return {
+    core_question: data.core_question,
+    sub_questions: data.sub_questions,
+  };
+}
+
 function ResearchDecompose() {
   const [direction, setDirection] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [tree, setTree] = useState<import('@/types').ResearchTree | null>(null);
+  const [tree, setTree] = useState<ResearchTree | null>(null);
+  const [agentId, setAgentId] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const { addNotification } = useUIStore();
 
+  useEffect(() => {
+    const loadAgent = async () => {
+      try {
+        const response = await agentAPI.getAgents();
+        const agents = Array.isArray(response.data) ? response.data as AgentItem[] : [];
+        const agent = agents.find((item) => item.category === 'problem-decomposition');
+        if (!agent) {
+          addNotification({
+            type: 'warning',
+            message: '未找到对应智能体，请检查 Supabase agents 表。',
+            duration: 5000,
+          });
+          return;
+        }
+        setAgentId(agent.id);
+      } catch (error) {
+        addNotification({
+          type: 'error',
+          message: getErrorMessage(error),
+          duration: 5000,
+        });
+      }
+    };
+
+    loadAgent();
+  }, [addNotification]);
+
   const handleAnalyze = async () => {
-    if (!direction.trim()) {
+    if (isAnalyzing) return;
+
+    const userInput = direction.trim();
+    if (!userInput) {
       addNotification({ type: 'warning', message: '请输入研究方向', duration: 3000 });
       return;
     }
+
+    if (!agentId) {
+      addNotification({
+        type: 'warning',
+        message: '未找到对应智能体，请检查 Supabase agents 表。',
+        duration: 5000,
+      });
+      return;
+    }
+
+    const userMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: userInput,
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
     setIsAnalyzing(true);
 
-    // TODO: Replace with actual API call
-    // const response = await researchAPI.decompose(direction);
-    // setTree(response.data);
+    try {
+      let currentConversationId = conversationId;
+      if (!currentConversationId) {
+        const conversationResponse = await conversationAPI.createConversation({
+          agent_id: agentId,
+          title: '问题拆解对话',
+        });
+        currentConversationId = String(conversationResponse.data.id);
+        setConversationId(currentConversationId);
+      }
 
-    setTimeout(() => {
-      setTree(mockAPI.getMockResearchTree());
-      setIsAnalyzing(false);
+      const response = await conversationAPI.chat({
+        conversation_id: currentConversationId,
+        agent_id: agentId,
+        message: userInput,
+      });
+
+      const reply = String(response.data?.reply || '');
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          content: reply,
+        },
+      ]);
+
+      const parsedTree = normalizeResearchTree(extractJsonObject(reply));
+      if (parsedTree) {
+        setTree(parsedTree);
+      }
+
       addNotification({ type: 'success', message: '问题拆解完成', duration: 3000 });
-    }, 2000);
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        message: getErrorMessage(error) || '智能体调用失败，请检查后端或 Agent 配置。',
+        duration: 5000,
+      });
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   return (
     <div className="space-y-6 pb-20 md:pb-0">
       <h1 className="text-2xl font-bold">研究问题拆解</h1>
 
-      {/* Input */}
       <div className="sci-card-glow">
         <label className="block text-sm font-medium text-sci-ink mb-3">
           输入你的研究方向
@@ -137,10 +254,10 @@ function ResearchDecompose() {
           <input
             type="text"
             value={direction}
-            onChange={(e) => setDirection(e.target.value)}
+            onChange={(event) => setDirection(event.target.value)}
             placeholder="例如：基于深度学习的代码克隆检测方法研究"
             className="sci-input flex-1"
-            onKeyDown={(e) => e.key === 'Enter' && handleAnalyze()}
+            onKeyDown={(event) => event.key === 'Enter' && handleAnalyze()}
           />
           <button
             onClick={handleAnalyze}
@@ -162,7 +279,31 @@ function ResearchDecompose() {
         </div>
       </div>
 
-      {/* Result */}
+      {isAnalyzing && (
+        <p className="text-sm text-sci-muted">智能体正在分析，请稍候……</p>
+      )}
+
+      {messages.length > 0 && (
+        <div className="sci-card space-y-3">
+          <h2 className="sci-section-title">对话记录</h2>
+          {messages.map((message) => (
+            <div
+              key={message.id}
+              className={`rounded-lg p-3 text-sm leading-relaxed whitespace-pre-wrap ${
+                message.role === 'user'
+                  ? 'bg-sci-primary/10 text-sci-ink'
+                  : 'bg-sci-bg3 text-sci-muted'
+              }`}
+            >
+              <p className="mb-1 text-xs font-medium opacity-70">
+                {message.role === 'user' ? '你的问题' : '智能体回复'}
+              </p>
+              {message.content}
+            </div>
+          ))}
+        </div>
+      )}
+
       {tree && (
         <div className="space-y-4">
           <div className="sci-card-glow">
@@ -179,7 +320,6 @@ function ResearchDecompose() {
             </div>
           </div>
 
-          {/* Action Buttons */}
           <div className="flex gap-3">
             <button className="sci-btn-primary">
               <BookOpen size={16} />

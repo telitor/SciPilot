@@ -16,6 +16,16 @@ const colorMap = {
   info: 'text-sky-400 border-sky-500/20 bg-sky-500/10',
 };
 
+function getNotificationMessage(message: unknown): string {
+  if (typeof message === 'string') return message;
+
+  try {
+    return JSON.stringify(message) || '未知错误';
+  } catch {
+    return '未知错误';
+  }
+}
+
 function NotificationContainer() {
   const { notifications, removeNotification } = useUIStore();
 
@@ -40,10 +50,7 @@ function NotificationItem({
   onClose: () => void;
 }) {
   const Icon = iconMap[notification.type];
-  const message =
-    typeof notification.message === 'string'
-      ? notification.message
-      : JSON.stringify(notification.message);
+  const message = getNotificationMessage(notification.message);
 
   useEffect(() => {
     if (notification.duration) {

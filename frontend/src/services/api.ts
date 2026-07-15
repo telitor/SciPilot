@@ -1,6 +1,10 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { useAuthStore } from '@/store/authStore';
-import { useUIStore } from '@/store/uiStore';
+
+export const PAPER_ANALYSIS_TIMEOUT_MESSAGE =
+  '论文解析超时，请尝试上传更短的 PDF，或稍后重试。';
+export const AGENT_RESPONSE_TIMEOUT_MESSAGE =
+  '智能体响应超时，请稍后重试。首次调用可能需要 1-2 分钟。';
 
 // ==================== Axios Instance ====================
 const apiClient: AxiosInstance = axios.create({
@@ -8,15 +12,24 @@ const apiClient: AxiosInstance = axios.create({
   timeout: 30000,
 });
 
-export function getErrorMessage(error: unknown): string {
+export function getErrorMessage(
+  error: unknown,
+  timeoutMessage = AGENT_RESPONSE_TIMEOUT_MESSAGE
+): string {
   if (axios.isAxiosError(error)) {
-    if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
-      return '论文解析超时，请尝试上传更短的 PDF，或稍后重试。';
+    if (
+      error.code === 'ECONNABORTED' ||
+      error.code === 'ETIMEDOUT' ||
+      error.message.toLowerCase().includes('timeout')
+    ) {
+      return timeoutMessage;
     }
 
     const detail = error.response?.data?.detail;
 
-    if (typeof detail === 'string') return detail;
+    if (typeof detail === 'string') {
+      return detail.toLowerCase().includes('timeout') ? timeoutMessage : detail;
+    }
 
     if (Array.isArray(detail)) {
       return detail
@@ -59,7 +72,7 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response interceptor - handle errors
+// Response interceptor - only handle global authentication failures.
 apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
@@ -67,11 +80,6 @@ apiClient.interceptors.response.use(
       useAuthStore.getState().logout();
       window.location.href = '/login';
     }
-    useUIStore.getState().addNotification({
-      type: 'error',
-      message: getErrorMessage(error),
-      duration: 5000,
-    });
     return Promise.reject(error);
   }
 );
@@ -196,7 +204,7 @@ export const conversationAPI = {
     apiClient.get(`/conversations/${conversationId}/messages`),
 
   chat: (data: { conversation_id: string; agent_id: string; message: string }) =>
-    apiClient.post('/chat', data),
+    apiClient.post('/chat', data, { timeout: 120000 }),
 };
 
 // ==================== Mock Data Helpers ====================
