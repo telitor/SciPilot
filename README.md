@@ -1,8 +1,8 @@
 <div align="center">
 
-<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&height=300&color=0:020617,18:0F172A,42:1D4ED8,66:6D28D9,84:0891B2,100:22D3EE&text=SciPilot&fontSize=86&fontColor=FFFFFF&animation=fadeIn&fontAlignY=34&desc=Multi-Agent%20Research%20Engineering%20Platform&descAlignY=55&descSize=21" />
+<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&height=315&color=0:020617,18:0B1120,38:172554,58:1D4ED8,78:6D28D9,100:22D3EE&text=SciPilot&fontSize=88&fontColor=FFFFFF&animation=fadeIn&fontAlignY=34&desc=Multi-Agent%20Research%20Engineering%20Platform&descAlignY=55&descSize=21" />
 
-<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=650&size=27&duration=2500&pause=600&color=38BDF8&center=true&vCenter=true&repeat=true&width=1050&lines=Five+Research+Agents+%C2%B7+One+Unified+Intelligence+Core;Paper+Reading+%C2%B7+Problem+Decomposition+%C2%B7+Result+Interpretation;Code+Reproduction+%C2%B7+Project+Planning;From+Research+Input+to+Executable+Engineering+Workflow" />
+<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=650&size=27&duration=2500&pause=650&color=38BDF8&center=true&vCenter=true&repeat=true&width=1080&height=55&lines=Five+Research+Agents+%C2%B7+One+Unified+Intelligence+Core;Paper+Reading+%C2%B7+Problem+Decomposition+%C2%B7+Result+Interpretation;Code+Reproduction+%C2%B7+Project+Planning;From+Research+Input+to+Executable+Engineering+Workflow" />
 
 <br/>
 
@@ -21,7 +21,7 @@
 
 <br/><br/>
 
-<img src="https://skillicons.dev/icons?i=react,ts,vite,tailwind,py,fastapi,supabase,postgres,git,github,vscode" />
+<img src="https://skillicons.dev/icons?i=react,ts,vite,tailwind,py,fastapi,supabase,postgres,git,github,vscode&theme=dark" />
 
 <br/><br/>
 
@@ -35,11 +35,64 @@
 从论文理解、问题拆解到代码复现与项目规划，将分散的科研任务连接为完整的智能工作流。
 </sub>
 
+<br/><br/>
+
+<table>
+<tr>
+<td align="center"><code>AGENT CORE</code><br/><strong>5 / 5 ONLINE</strong></td>
+<td align="center"><code>PIPELINE</code><br/><strong>OPERATIONAL</strong></td>
+<td align="center"><code>DATA LAYER</code><br/><strong>CONNECTED</strong></td>
+<td align="center"><code>SECURITY</code><br/><strong>ENABLED</strong></td>
+</tr>
+</table>
+
+</div>
+
+```text
+╔══════════════════════════════════════════════════════════════════╗
+║                         SCIPILOT SYSTEM                         ║
+╠══════════════════════════════════════════════════════════════════╣
+║  MODE          Research Engineering                             ║
+║  AGENT CORE    Five Vertical Agents                             ║
+║  GATEWAY       FastAPI Unified Dispatcher                       ║
+║  DATA          Supabase PostgreSQL + RLS                        ║
+║  RUNTIME       Authenticated WebSocket Agents                   ║
+║  STATUS        Full-Stack MVP Closed Loop Operational           ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+
+<div align="center">
+
+### Navigation Console · 快速导航
+
+<a href="#mission-control"><img src="https://img.shields.io/badge/01-Mission%20Control-172554?style=for-the-badge" /></a>
+<a href="#agent-constellation"><img src="https://img.shields.io/badge/02-Agent%20Matrix-312E81?style=for-the-badge" /></a>
+<a href="#intelligence-pipeline"><img src="https://img.shields.io/badge/03-Pipeline-1D4ED8?style=for-the-badge" /></a>
+<a href="#system-architecture"><img src="https://img.shields.io/badge/04-Architecture-0369A1?style=for-the-badge" /></a>
+
+<br/>
+
+<a href="#dynamic-agent-routing"><img src="https://img.shields.io/badge/05-Routing-0E7490?style=for-the-badge" /></a>
+<a href="#capability-matrix"><img src="https://img.shields.io/badge/06-Capabilities-0F766E?style=for-the-badge" /></a>
+<a href="#api-gateway"><img src="https://img.shields.io/badge/07-API%20Gateway-047857?style=for-the-badge" /></a>
+<a href="#data-galaxy"><img src="https://img.shields.io/badge/08-Data%20Galaxy-4D7C0F?style=for-the-badge" /></a>
+
+<br/>
+
+<a href="#technology-core"><img src="https://img.shields.io/badge/09-Tech%20Core-7E22CE?style=for-the-badge" /></a>
+<a href="#project-structure"><img src="https://img.shields.io/badge/10-Structure-9333EA?style=for-the-badge" /></a>
+<a href="#security-protocol"><img src="https://img.shields.io/badge/11-Security-7C3AED?style=for-the-badge" /></a>
+<a href="#evolution-roadmap"><img src="https://img.shields.io/badge/13-Roadmap-C026D3?style=for-the-badge" /></a>
+
 </div>
 
 ---
 
+<a id="mission-control"></a>
+
 ## 01 · Mission Control / 平台使命
+
+<p align="right"><code>SCIPILOT::CORE_01</code></p>
 
 **SciPilot** 是一个面向软件工程学习、科研分析与项目实践的多智能体平台。
 
@@ -59,12 +112,29 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
+> [!IMPORTANT]
 > **SciPilot is not a general chatbot.**  
 > 它不是单一的问答工具，而是一套面向科研与软件工程任务的智能协作系统。
 
 ---
 
+<a id="agent-constellation"></a>
+
 ## 02 · Agent Constellation / 智能体矩阵
+
+<p align="right"><code>SCIPILOT::AGENT_MATRIX_02</code></p>
+
+<div align="center">
+
+<img src="https://img.shields.io/badge/01-Paper%20Reading-2563EB?style=for-the-badge" />
+<img src="https://img.shields.io/badge/02-Problem%20Decomposition-6D28D9?style=for-the-badge" />
+<img src="https://img.shields.io/badge/03-Result%20Interpretation-0891B2?style=for-the-badge" />
+<img src="https://img.shields.io/badge/04-Code%20Reproduction-059669?style=for-the-badge" />
+<img src="https://img.shields.io/badge/05-Project%20Planning-C026D3?style=for-the-badge" />
+
+</div>
+
+<br/>
 
 <table>
 <tr>
@@ -178,7 +248,11 @@ Category: project-planning
 
 ---
 
+<a id="intelligence-pipeline"></a>
+
 ## 03 · Intelligence Pipeline / 智能工作流
+
+<p align="right"><code>SCIPILOT::PIPELINE_03</code></p>
 
 ```mermaid
 flowchart LR
@@ -230,7 +304,11 @@ Supabase 保存 User / Assistant 消息
 
 ---
 
+<a id="system-architecture"></a>
+
 ## 04 · System Architecture / 系统架构
+
+<p align="right"><code>SCIPILOT::ARCHITECTURE_04</code></p>
 
 ```mermaid
 flowchart TB
@@ -294,7 +372,11 @@ flowchart TB
 
 ---
 
+<a id="dynamic-agent-routing"></a>
+
 ## 05 · Dynamic Agent Routing / 动态智能体调度
+
+<p align="right"><code>SCIPILOT::DISPATCHER_05</code></p>
 
 后端不会将 Agent 密钥或调用地址暴露给前端。
 
@@ -343,7 +425,11 @@ reply
 
 ---
 
+<a id="capability-matrix"></a>
+
 ## 06 · Capability Matrix / 能力矩阵
+
+<p align="right"><code>SCIPILOT::CAPABILITIES_06</code></p>
 
 | Capability | Description | Status |
 |---|---|:---:|
@@ -366,7 +452,11 @@ reply
 
 ---
 
+<a id="api-gateway"></a>
+
 ## 07 · API Gateway / 接口总览
+
+<p align="right"><code>SCIPILOT::API_GATEWAY_07</code></p>
 
 | Method | Endpoint | Function |
 |---|---|---|
@@ -425,7 +515,11 @@ file: paper.pdf
 
 ---
 
+<a id="data-galaxy"></a>
+
 ## 08 · Data Galaxy / 数据模型
+
+<p align="right"><code>SCIPILOT::DATA_LAYER_08</code></p>
 
 ```mermaid
 erDiagram
@@ -486,7 +580,11 @@ Profile
 
 ---
 
+<a id="technology-core"></a>
+
 ## 09 · Technology Core / 技术核心
+
+<p align="right"><code>SCIPILOT::TECH_CORE_09</code></p>
 
 | Domain | Technology |
 |---|---|
@@ -505,7 +603,11 @@ Profile
 
 ---
 
+<a id="project-structure"></a>
+
 ## 10 · Project Structure / 项目结构
+
+<p align="right"><code>SCIPILOT::REPOSITORY_10</code></p>
 
 ```text
 SciPilot
@@ -679,13 +781,18 @@ VITE_SUPABASE_URL=your_supabase_url
 VITE_SUPABASE_ANON_KEY=your_anon_key
 ```
 
+> [!CAUTION]
 > `.env` 文件、真实密钥与接口鉴权信息不得提交至 GitHub。
 
 </details>
 
 ---
 
+<a id="security-protocol"></a>
+
 ## 11 · Security Protocol / 安全协议
+
+<p align="right"><code>SCIPILOT::SECURITY_11</code></p>
 
 ```mermaid
 flowchart LR
@@ -711,7 +818,11 @@ flowchart LR
 
 ---
 
+<a id="system-verification"></a>
+
 ## 12 · System Verification / 系统验证
+
+<p align="right"><code>SCIPILOT::DIAGNOSTICS_12</code></p>
 
 ```text
 ╔══════════════════════════════════════════════════════════════╗
@@ -733,9 +844,22 @@ flowchart LR
 ╚══════════════════════════════════════════════════════════════╝
 ```
 
+<div align="center">
+
+<img src="https://img.shields.io/badge/AUTHENTICATION-READY-059669?style=for-the-badge" />
+<img src="https://img.shields.io/badge/AGENT%20ROUTING-READY-2563EB?style=for-the-badge" />
+<img src="https://img.shields.io/badge/DATA%20PERSISTENCE-READY-0891B2?style=for-the-badge" />
+<img src="https://img.shields.io/badge/PRODUCTION%20BUILD-PASSED-6D28D9?style=for-the-badge" />
+
+</div>
+
 ---
 
+<a id="evolution-roadmap"></a>
+
 ## 13 · Evolution Roadmap / 演进路线
+
+<p align="right"><code>SCIPILOT::EVOLUTION_13</code></p>
 
 ```mermaid
 timeline
@@ -771,7 +895,11 @@ timeline
 
 ---
 
+<a id="vision"></a>
+
 ## 14 · Vision / 项目愿景
+
+<p align="right"><code>SCIPILOT::VISION_14</code></p>
 
 SciPilot 希望将科研过程中的多个独立环节连接起来：
 
@@ -807,7 +935,11 @@ flowchart LR
 
 ---
 
+<a id="contributors"></a>
+
 ## 15 · Contributors / 项目贡献者
+
+<p align="right"><code>SCIPILOT::TEAM_15</code></p>
 
 <div align="center">
 
@@ -827,7 +959,7 @@ Designed, engineered and continuously evolved by the SciPilot team.
 
 <div align="center">
 
-<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&height=185&color=0:22D3EE,24:0891B2,50:1D4ED8,76:6D28D9,100:020617&section=footer" />
+<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&height=195&color=0:22D3EE,22:0891B2,46:1D4ED8,72:6D28D9,100:020617&section=footer" />
 
 <h2>SciPilot</h2>
 
@@ -837,6 +969,12 @@ Designed, engineered and continuously evolved by the SciPilot team.
 
 <br/>
 
-`Research Understanding` · `Engineering Execution` · `Agent Collaboration`
+<img src="https://img.shields.io/badge/Research-Understanding-172554?style=for-the-badge" />
+<img src="https://img.shields.io/badge/Engineering-Execution-1D4ED8?style=for-the-badge" />
+<img src="https://img.shields.io/badge/Agent-Collaboration-6D28D9?style=for-the-badge" />
+
+<br/><br/>
+
+<code>SCIPILOT // RESEARCH INTELLIGENCE SYSTEM // OPERATIONAL</code>
 
 </div>
