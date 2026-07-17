@@ -1,8 +1,19 @@
+<!-- SCIPILOT README · CINEMATIC NEON EDITION -->
+
 <div align="center">
 
-<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&height=315&color=0:020617,18:0B1120,38:172554,58:1D4ED8,78:6D28D9,100:22D3EE&text=SciPilot&fontSize=88&fontColor=FFFFFF&animation=fadeIn&fontAlignY=34&desc=Multi-Agent%20Research%20Engineering%20Platform&descAlignY=55&descSize=21" />
+<img width="100%" src="https://capsule-render.vercel.app/api?type=venom&height=340&color=0:020617,18:0B1120,38:172554,58:1D4ED8,78:6D28D9,100:22D3EE&text=SciPilot&fontSize=92&fontColor=FFFFFF&animation=twinkling&fontAlignY=38&desc=Multi-Agent%20Research%20Engineering%20Platform&descAlignY=61&descSize=22&stroke=38BDF8&strokeWidth=1" />
 
-<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=650&size=27&duration=2500&pause=650&color=38BDF8&center=true&vCenter=true&repeat=true&width=1080&height=55&lines=Five+Research+Agents+%C2%B7+One+Unified+Intelligence+Core;Paper+Reading+%C2%B7+Problem+Decomposition+%C2%B7+Result+Interpretation;Code+Reproduction+%C2%B7+Project+Planning;From+Research+Input+to+Executable+Engineering+Workflow" />
+<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=700&size=27&duration=2200&pause=520&color=38BDF8&center=true&vCenter=true&repeat=true&width=1080&height=58&letterSpacing=2px&lines=Five+Research+Agents+%C2%B7+One+Unified+Intelligence+Core;Paper+Reading+%C2%B7+Problem+Decomposition+%C2%B7+Result+Interpretation;Code+Reproduction+%C2%B7+Project+Planning;From+Research+Input+to+Executable+Engineering+Workflow" />
+
+<br/>
+
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=15&duration=1050&pause=280&color=A78BFA&center=true&vCenter=true&repeat=true&width=1080&height=34&letterSpacing=1px&lines=%3E+INITIALIZING+RESEARCH+INTELLIGENCE+CORE...;%3E+LOADING+FIVE+VERTICAL+AGENTS...;%3E+CONNECTING+FASTAPI+%2B+SUPABASE+%2B+WEBSOCKET...;%3E+SCIPILOT+SYSTEM+OPERATIONAL" />
+
+<br/>
+
+<img width="100%" height="4" src="https://capsule-render.vercel.app/api?type=rect&height=4&color=0:020617,18:22D3EE,50:1D4ED8,82:A78BFA,100:020617" />
+
 
 <br/>
 
@@ -48,6 +59,34 @@
 
 </div>
 
+
+<div align="center">
+
+<table>
+<tr>
+<td align="center" width="25%">
+<img src="https://img.shields.io/badge/CORE-ONLINE-22D3EE?style=for-the-badge&labelColor=020617" /><br/>
+<sub><code>INTELLIGENCE ENGINE</code></sub>
+</td>
+<td align="center" width="25%">
+<img src="https://img.shields.io/badge/AGENTS-5%20ACTIVE-A78BFA?style=for-the-badge&labelColor=020617" /><br/>
+<sub><code>VERTICAL MATRIX</code></sub>
+</td>
+<td align="center" width="25%">
+<img src="https://img.shields.io/badge/GATEWAY-READY-3B82F6?style=for-the-badge&labelColor=020617" /><br/>
+<sub><code>FASTAPI DISPATCHER</code></sub>
+</td>
+<td align="center" width="25%">
+<img src="https://img.shields.io/badge/DATA-SECURED-34D399?style=for-the-badge&labelColor=020617" /><br/>
+<sub><code>SUPABASE + RLS</code></sub>
+</td>
+</tr>
+</table>
+
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=500&size=13&duration=1300&pause=220&color=64748B&center=true&vCenter=true&repeat=true&width=960&height=30&lines=SYSTEM+SIGNAL+%E2%97%8F%E2%97%8F%E2%97%8F%E2%97%8F%E2%97%8F+STABLE;AGENT+CHANNELS+%E2%97%8F%E2%97%8F%E2%97%8F%E2%97%8F%E2%97%8F+CONNECTED;RESEARCH+PIPELINE+%E2%97%8F%E2%97%8F%E2%97%8F%E2%97%8F%E2%97%8F+READY" />
+
+</div>
+
 ```text
 ╔══════════════════════════════════════════════════════════════════╗
 ║                         SCIPILOT SYSTEM                         ║
@@ -63,30 +102,49 @@
 
 <div align="center">
 
+<img width="100%" src="https://capsule-render.vercel.app/api?type=soft&height=105&color=0:020617,42:172554,70:312E81,100:020617&text=NAVIGATION%20CONSOLE&fontSize=31&fontColor=E0F2FE&animation=scaleIn&fontAlignY=45&desc=Select%20a%20module%20to%20enter%20the%20SciPilot%20system&descAlignY=70&descSize=14&stroke=38BDF8&strokeWidth=1" />
+
 ### Navigation Console · 快速导航
 
-<a href="#mission-control"><img src="https://img.shields.io/badge/01-Mission%20Control-172554?style=for-the-badge" /></a>
-<a href="#agent-constellation"><img src="https://img.shields.io/badge/02-Agent%20Matrix-312E81?style=for-the-badge" /></a>
-<a href="#intelligence-pipeline"><img src="https://img.shields.io/badge/03-Pipeline-1D4ED8?style=for-the-badge" /></a>
-<a href="#system-architecture"><img src="https://img.shields.io/badge/04-Architecture-0369A1?style=for-the-badge" /></a>
+<table>
+<tr>
+<td align="center"><a href="#mission-control"><img src="https://img.shields.io/badge/01-Mission%20Control-172554?style=for-the-badge&logo=target&logoColor=38BDF8" /></a></td>
+<td align="center"><a href="#agent-constellation"><img src="https://img.shields.io/badge/02-Agent%20Matrix-312E81?style=for-the-badge&logo=probot&logoColor=A78BFA" /></a></td>
+<td align="center"><a href="#intelligence-pipeline"><img src="https://img.shields.io/badge/03-Pipeline-1D4ED8?style=for-the-badge&logo=apacheairflow&logoColor=white" /></a></td>
+</tr>
+<tr>
+<td align="center"><a href="#system-architecture"><img src="https://img.shields.io/badge/04-Architecture-0369A1?style=for-the-badge&logo=diagramsdotnet&logoColor=white" /></a></td>
+<td align="center"><a href="#dynamic-agent-routing"><img src="https://img.shields.io/badge/05-Routing-0E7490?style=for-the-badge&logo=routes&logoColor=white" /></a></td>
+<td align="center"><a href="#capability-matrix"><img src="https://img.shields.io/badge/06-Capabilities-0F766E?style=for-the-badge&logo=checkmarx&logoColor=white" /></a></td>
+</tr>
+<tr>
+<td align="center"><a href="#api-gateway"><img src="https://img.shields.io/badge/07-API%20Gateway-047857?style=for-the-badge&logo=fastapi&logoColor=white" /></a></td>
+<td align="center"><a href="#data-galaxy"><img src="https://img.shields.io/badge/08-Data%20Galaxy-4D7C0F?style=for-the-badge&logo=supabase&logoColor=white" /></a></td>
+<td align="center"><a href="#technology-core"><img src="https://img.shields.io/badge/09-Tech%20Core-7E22CE?style=for-the-badge&logo=stackshare&logoColor=white" /></a></td>
+</tr>
+<tr>
+<td align="center"><a href="#project-structure"><img src="https://img.shields.io/badge/10-Structure-9333EA?style=for-the-badge&logo=files&logoColor=white" /></a></td>
+<td align="center"><a href="#security-protocol"><img src="https://img.shields.io/badge/11-Security-7C3AED?style=for-the-badge&logo=shield&logoColor=white" /></a></td>
+<td align="center"><a href="#system-verification"><img src="https://img.shields.io/badge/12-Verification-6D28D9?style=for-the-badge&logo=testinglibrary&logoColor=white" /></a></td>
+</tr>
+<tr>
+<td align="center"><a href="#evolution-roadmap"><img src="https://img.shields.io/badge/13-Roadmap-C026D3?style=for-the-badge&logo=rocket&logoColor=white" /></a></td>
+<td align="center"><a href="#vision"><img src="https://img.shields.io/badge/14-Vision-DB2777?style=for-the-badge&logo=googlelens&logoColor=white" /></a></td>
+<td align="center"><a href="#contributors"><img src="https://img.shields.io/badge/15-Contributors-B91C1C?style=for-the-badge&logo=githubsponsors&logoColor=white" /></a></td>
+</tr>
+</table>
 
-<br/>
-
-<a href="#dynamic-agent-routing"><img src="https://img.shields.io/badge/05-Routing-0E7490?style=for-the-badge" /></a>
-<a href="#capability-matrix"><img src="https://img.shields.io/badge/06-Capabilities-0F766E?style=for-the-badge" /></a>
-<a href="#api-gateway"><img src="https://img.shields.io/badge/07-API%20Gateway-047857?style=for-the-badge" /></a>
-<a href="#data-galaxy"><img src="https://img.shields.io/badge/08-Data%20Galaxy-4D7C0F?style=for-the-badge" /></a>
-
-<br/>
-
-<a href="#technology-core"><img src="https://img.shields.io/badge/09-Tech%20Core-7E22CE?style=for-the-badge" /></a>
-<a href="#project-structure"><img src="https://img.shields.io/badge/10-Structure-9333EA?style=for-the-badge" /></a>
-<a href="#security-protocol"><img src="https://img.shields.io/badge/11-Security-7C3AED?style=for-the-badge" /></a>
-<a href="#evolution-roadmap"><img src="https://img.shields.io/badge/13-Roadmap-C026D3?style=for-the-badge" /></a>
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=13&duration=1150&pause=250&color=38BDF8&center=true&vCenter=true&repeat=true&width=900&height=32&lines=%5B+01%E2%80%9315+%5D+MODULES+SYNCHRONIZED;%5B+NAVIGATION+%5D+READY+FOR+INPUT;%5B+SCIPILOT+%5D+ENTER+THE+RESEARCH+SYSTEM" />
 
 </div>
 
 ---
+
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=01+%C2%B7+MISSION+CONTROL&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=CORE+MISSION+%26+PLATFORM+POSITIONING&descAlignY=70&descSize=13&stroke=38BDF8&strokeWidth=1" />
+
+</div>
 
 <a id="mission-control"></a>
 
@@ -117,6 +175,12 @@
 > 它不是单一的问答工具，而是一套面向科研与软件工程任务的智能协作系统。
 
 ---
+
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=02+%C2%B7+AGENT+CONSTELLATION&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=FIVE+VERTICAL+RESEARCH+AGENTS&descAlignY=70&descSize=13&stroke=A78BFA&strokeWidth=1" />
+
+</div>
 
 <a id="agent-constellation"></a>
 
@@ -248,6 +312,12 @@ Category: project-planning
 
 ---
 
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=03+%C2%B7+INTELLIGENCE+PIPELINE&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=FROM+INPUT+TO+STRUCTURED+OUTPUT&descAlignY=70&descSize=13&stroke=60A5FA&strokeWidth=1" />
+
+</div>
+
 <a id="intelligence-pipeline"></a>
 
 ## 03 · Intelligence Pipeline / 智能工作流
@@ -303,6 +373,12 @@ Supabase 保存 User / Assistant 消息
 ```
 
 ---
+
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=04+%C2%B7+SYSTEM+ARCHITECTURE&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=FULL-STACK+RESEARCH+ENGINEERING&descAlignY=70&descSize=13&stroke=22D3EE&strokeWidth=1" />
+
+</div>
 
 <a id="system-architecture"></a>
 
@@ -372,6 +448,12 @@ flowchart TB
 
 ---
 
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=05+%C2%B7+DYNAMIC+AGENT+ROUTING&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=CATEGORY-BASED+INTELLIGENT+DISPATCH&descAlignY=70&descSize=13&stroke=2DD4BF&strokeWidth=1" />
+
+</div>
+
 <a id="dynamic-agent-routing"></a>
 
 ## 05 · Dynamic Agent Routing / 动态智能体调度
@@ -425,6 +507,12 @@ reply
 
 ---
 
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=06+%C2%B7+CAPABILITY+MATRIX&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=OPERATIONAL+FEATURE+VERIFICATION&descAlignY=70&descSize=13&stroke=34D399&strokeWidth=1" />
+
+</div>
+
 <a id="capability-matrix"></a>
 
 ## 06 · Capability Matrix / 能力矩阵
@@ -451,6 +539,12 @@ reply
 | Error Normalization | 统一超时与错误提示 | ✅ |
 
 ---
+
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=07+%C2%B7+API+GATEWAY&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=UNIFIED+SERVICE+ENTRYPOINT&descAlignY=70&descSize=13&stroke=4ADE80&strokeWidth=1" />
+
+</div>
 
 <a id="api-gateway"></a>
 
@@ -514,6 +608,12 @@ file: paper.pdf
 ```
 
 ---
+
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=08+%C2%B7+DATA+GALAXY&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=PERSISTENCE%2C+RELATIONS+%26+SECURITY&descAlignY=70&descSize=13&stroke=A3E635&strokeWidth=1" />
+
+</div>
 
 <a id="data-galaxy"></a>
 
@@ -580,6 +680,12 @@ Profile
 
 ---
 
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=09+%C2%B7+TECHNOLOGY+CORE&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=ENGINEERING+STACK+%26+RUNTIME&descAlignY=70&descSize=13&stroke=C084FC&strokeWidth=1" />
+
+</div>
+
 <a id="technology-core"></a>
 
 ## 09 · Technology Core / 技术核心
@@ -602,6 +708,12 @@ Profile
 | Version Control | Git, GitHub |
 
 ---
+
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=10+%C2%B7+PROJECT+STRUCTURE&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=REPOSITORY+SYSTEM+MAP&descAlignY=70&descSize=13&stroke=D8B4FE&strokeWidth=1" />
+
+</div>
 
 <a id="project-structure"></a>
 
@@ -661,6 +773,12 @@ SciPilot
 ```
 
 ---
+
+<div align="center">
+
+<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=650&size=18&duration=1500&pause=420&color=38BDF8&center=true&vCenter=true&repeat=true&width=960&height=42&lines=DEPLOYMENT+CONSOLE+%2F%2F+LOCAL+RUNTIME;BACKEND+%E2%86%92+FASTAPI+%E2%86%92+PORT+8000;FRONTEND+%E2%86%92+VITE+%E2%86%92+PORT+5173" />
+
+</div>
 
 <details>
 <summary><strong>⚡ Quick Start / 快速启动</strong></summary>
@@ -722,6 +840,12 @@ http://localhost:5173
 </details>
 
 ---
+
+<div align="center">
+
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=14&duration=1200&pause=350&color=A78BFA&center=true&vCenter=true&repeat=true&width=960&height=34&lines=SECURE+CONFIGURATION+CHANNEL;SERVER-SIDE+CREDENTIALS+ONLY;NO+SECRETS+EXPOSED+TO+THE+FRONTEND" />
+
+</div>
 
 <details>
 <summary><strong>🔐 Environment Configuration / 环境配置</strong></summary>
@@ -788,6 +912,12 @@ VITE_SUPABASE_ANON_KEY=your_anon_key
 
 ---
 
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=11+%C2%B7+SECURITY+PROTOCOL&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=CREDENTIAL+ISOLATION+%26+RLS&descAlignY=70&descSize=13&stroke=8B5CF6&strokeWidth=1" />
+
+</div>
+
 <a id="security-protocol"></a>
 
 ## 11 · Security Protocol / 安全协议
@@ -818,11 +948,24 @@ flowchart LR
 
 ---
 
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=12+%C2%B7+SYSTEM+VERIFICATION&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=MVP+DIAGNOSTICS+MATRIX&descAlignY=70&descSize=13&stroke=A78BFA&strokeWidth=1" />
+
+</div>
+
 <a id="system-verification"></a>
 
 ## 12 · System Verification / 系统验证
 
 <p align="right"><code>SCIPILOT::DIAGNOSTICS_12</code></p>
+
+<div align="center">
+
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=14&duration=820&pause=180&color=34D399&center=true&vCenter=true&repeat=true&width=920&height=34&lines=%E2%97%8F+AUTHENTICATION+READY;%E2%97%8F+AGENT+ROUTING+READY;%E2%97%8F+DATA+PERSISTENCE+READY;%E2%97%8F+PRODUCTION+BUILD+PASSED" />
+
+</div>
+
 
 ```text
 ╔══════════════════════════════════════════════════════════════╗
@@ -854,6 +997,12 @@ flowchart LR
 </div>
 
 ---
+
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=13+%C2%B7+EVOLUTION+ROADMAP&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=FROM+CLOSED+LOOP+TO+AUTONOMOUS+WORKFLOW&descAlignY=70&descSize=13&stroke=E879F9&strokeWidth=1" />
+
+</div>
 
 <a id="evolution-roadmap"></a>
 
@@ -895,6 +1044,12 @@ timeline
 
 ---
 
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=14+%C2%B7+VISION&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=INTELLIGENT+RESEARCH+WORKFLOW&descAlignY=70&descSize=13&stroke=F472B6&strokeWidth=1" />
+
+</div>
+
 <a id="vision"></a>
 
 ## 14 · Vision / 项目愿景
@@ -935,6 +1090,12 @@ flowchart LR
 
 ---
 
+<div align="center">
+
+<img width="100%" src="https://capsule-render.vercel.app/api?type=rect&height=92&color=0:020617,26:0F172A,58:172554,82:312E81,100:020617&text=15+%C2%B7+CONTRIBUTORS&fontSize=29&fontColor=F8FAFC&animation=twinkling&fontAlignY=42&desc=SCIPILOT+ENGINEERING+TEAM&descAlignY=70&descSize=13&stroke=FB7185&strokeWidth=1" />
+
+</div>
+
 <a id="contributors"></a>
 
 ## 15 · Contributors / 项目贡献者
@@ -959,7 +1120,7 @@ Designed, engineered and continuously evolved by the SciPilot team.
 
 <div align="center">
 
-<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&height=195&color=0:22D3EE,22:0891B2,46:1D4ED8,72:6D28D9,100:020617&section=footer" />
+<img width="100%" src="https://capsule-render.vercel.app/api?type=venom&height=215&color=0:22D3EE,22:0891B2,46:1D4ED8,72:6D28D9,100:020617&section=footer&animation=twinkling" />
 
 <h2>SciPilot</h2>
 
@@ -976,5 +1137,11 @@ Designed, engineered and continuously evolved by the SciPilot team.
 <br/><br/>
 
 <code>SCIPILOT // RESEARCH INTELLIGENCE SYSTEM // OPERATIONAL</code>
+<br/><br/>
+
+<img src="https://readme-typing-svg.demolab.com?font=Orbitron&weight=700&size=15&duration=1250&pause=260&color=38BDF8&center=true&vCenter=true&repeat=true&width=900&height=34&lines=RESEARCH+INTELLIGENCE+ONLINE;FIVE+AGENTS+%C2%B7+ONE+CORE;BUILD+%C2%B7+ANALYZE+%C2%B7+REPRODUCE+%C2%B7+EVOLVE" />
+
 
 </div>
+
+<!-- END OF SCIPILOT README -->
