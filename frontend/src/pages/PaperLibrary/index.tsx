@@ -1,29 +1,50 @@
-import { useState } from "react";
-import { Search, Upload, Clock, FileText, Trash2 } from "lucide-react";
-import { usePaperStore } from "@/store/paperStore";
-import { useUIStore } from "@/store/uiStore";
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Search, Upload, Clock, FileText, Trash2 } from 'lucide-react';
+import { usePaperStore } from '@/store/paperStore';
+import { useUIStore } from '@/store/uiStore';
+import { paperAPI } from '@/services/api';
 
 function PaperLibrary() {
-  const { papers, setCurrentPaper, deletePaper } = usePaperStore();
+  const navigate = useNavigate();
+  const { papers, setPapers, setCurrentPaper, deletePaper, isLoading, setLoading } = usePaperStore();
   const { addNotification } = useUIStore();
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    paperAPI
+      .getPapers({ limit: 100 })
+      .then((response) => {
+        if (active) setPapers(response.data.items ?? response.data);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [setLoading, setPapers]);
 
   const filteredPapers = papers.filter((paper) => {
     const matchesSearch =
       !searchQuery ||
       paper.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      paper.authors.some((a) =>
-        a.toLowerCase().includes(searchQuery.toLowerCase()),
-      );
-    const matchesStatus =
-      filterStatus === "all" || paper.status === filterStatus;
+      paper.authors.some((a) => a.toLowerCase().includes(searchQuery.toLowerCase()));
+    const matchesStatus = filterStatus === 'all' || paper.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
 
-  const handleDelete = (id: string) => {
-    deletePaper(id);
-    addNotification({ type: "success", message: "论文已删除", duration: 3000 });
+  const handleDelete = async (id: string) => {
+    try {
+      await paperAPI.deletePaper(id);
+      deletePaper(id);
+      addNotification({ type: 'success', message: '论文已删除', duration: 3000 });
+    } catch {
+      // The shared API interceptor already displays the server error.
+    }
   };
 
   return (
@@ -32,13 +53,7 @@ function PaperLibrary() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">论文库</h1>
         <button
-          onClick={() =>
-            addNotification({
-              type: "info",
-              message: "上传功能在论文精读页面",
-              duration: 3000,
-            })
-          }
+          onClick={() => addNotification({ type: 'info', message: '上传功能在论文精读页面', duration: 3000 })}
           className="sci-btn-primary"
         >
           <Upload size={16} />
@@ -49,10 +64,7 @@ function PaperLibrary() {
       {/* Search & Filter */}
       <div className="flex gap-3">
         <div className="relative flex-1">
-          <Search
-            size={16}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-sci-muted"
-          />
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-sci-muted" />
           <input
             type="text"
             value={searchQuery}
@@ -79,7 +91,10 @@ function PaperLibrary() {
           <div
             key={paper.id}
             className="sci-card group cursor-pointer relative"
-            onClick={() => setCurrentPaper(paper)}
+            onClick={() => {
+              setCurrentPaper(paper);
+              navigate('/paper/read');
+            }}
           >
             <div className="flex items-start justify-between mb-3">
               <div className="w-10 h-10 rounded-lg bg-sci-bg3 flex items-center justify-center">
@@ -88,18 +103,14 @@ function PaperLibrary() {
               <div className="flex items-center gap-2">
                 <span
                   className={`sci-badge-${
-                    paper.status === "completed"
-                      ? "success"
-                      : paper.status === "processing"
-                        ? "warning"
-                        : "info"
+                    paper.status === 'completed'
+                      ? 'success'
+                      : paper.status === 'processing'
+                      ? 'warning'
+                      : 'info'
                   }`}
                 >
-                  {paper.status === "completed"
-                    ? "已完成"
-                    : paper.status === "processing"
-                      ? "处理中"
-                      : "上传中"}
+                  {paper.status === 'completed' ? '已完成' : paper.status === 'processing' ? '处理中' : '上传中'}
                 </span>
                 <button
                   onClick={(e) => {
@@ -116,31 +127,23 @@ function PaperLibrary() {
             <h3 className="font-semibold mb-2 line-clamp-2 group-hover:text-sci-accent transition-colors">
               {paper.title}
             </h3>
-            <p className="text-sm text-sci-muted mb-3 line-clamp-1">
-              {paper.authors.join(", ")}
-            </p>
+            <p className="text-sm text-sci-muted mb-3 line-clamp-1">{paper.authors.join(', ')}</p>
 
             <div className="flex items-center justify-between text-xs text-sci-muted">
               <span className="flex items-center gap-1">
                 <Clock size={12} />
-                {new Date(paper.uploaded_at).toLocaleDateString("zh-CN")}
+                {new Date(paper.uploaded_at).toLocaleDateString('zh-CN')}
               </span>
-              {paper.arxiv_id && (
-                <span className="sci-badge-info">{paper.arxiv_id}</span>
-              )}
+              {paper.arxiv_id && <span className="sci-badge-info">{paper.arxiv_id}</span>}
             </div>
           </div>
         ))}
       </div>
 
-      {filteredPapers.length === 0 && (
+      {!isLoading && filteredPapers.length === 0 && (
         <div className="text-center py-20">
           <FileText size={48} className="text-sci-border mx-auto mb-4" />
-          <p className="text-sci-muted">
-            {papers.length === 0
-              ? "暂无论文，请先前往论文精读上传"
-              : "没有找到匹配的论文"}
-          </p>
+          <p className="text-sci-muted">没有找到匹配的论文</p>
         </div>
       )}
     </div>

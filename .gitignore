@@ -1,40 +1,22 @@
-﻿# Environment files
+# Secrets
 .env
 .env.*
 !.env.example
-.env.local
-frontend/.env.local
 backend/.env
+frontend/.env
 
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-backend/.venv/
+*.py[cod]
 .venv/
+venv/
+.pytest_cache/
 
-# FastAPI / Uvicorn
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Local tooling and generated work
+.repo-sync/
+work/
 *.log
-
-# Node / Frontend
-node_modules/
-.next/
-dist/
-build/
-out/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Supabase local files
-.supabase/
-
-# IDE
-.vscode/
-.idea/
-
-# System files
-.DS_Store
-Thumbs.db

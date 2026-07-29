@@ -192,6 +192,130 @@ export interface KnowledgeGraph {
   edges: KGEdge[];
 }
 
+// ==================== Knowledge Base Types ====================
+export interface KnowledgeBaseStatus {
+  ready: boolean;
+  migration_required: boolean;
+  migration?: string;
+  collections: number;
+  documents: number;
+  chunks: number;
+  embedding_enabled: boolean;
+  retrieval?: 'hybrid' | 'full-text' | string;
+}
+
+export interface KnowledgeCollection {
+  id: string;
+  user_id?: string;
+  name: string;
+  description?: string | null;
+  is_public: boolean;
+  document_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeDocument {
+  id: string;
+  collection_id: string;
+  title: string;
+  source_type: 'pdf' | 'text' | 'markdown' | string;
+  source_url?: string | null;
+  file_name?: string | null;
+  mime_type?: string | null;
+  file_size?: number | null;
+  checksum?: string;
+  status: 'processing' | 'ready' | 'failed' | string;
+  chunk_count: number;
+  character_count: number;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  duplicate?: boolean;
+}
+
+export interface KnowledgeSearchHit {
+  chunk_id?: string;
+  document_id: string;
+  collection_id?: string;
+  document_title?: string;
+  title?: string;
+  content: string;
+  chunk_index?: number;
+  score?: number;
+  source_url?: string | null;
+  file_name?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface KnowledgeSearchResponse {
+  query: string;
+  items: KnowledgeSearchHit[];
+  total: number;
+  retrieval?: 'hybrid' | 'full-text' | string;
+}
+
+export interface KnowledgeCitation {
+  index: number;
+  document_id: string;
+  chunk_id?: string;
+  title: string;
+  chunk_index?: number;
+  source_url?: string | null;
+  file_name?: string | null;
+  score?: number;
+  excerpt: string;
+}
+
+export interface KnowledgeAnswerResponse {
+  query: string;
+  answer: string | null;
+  citations: KnowledgeCitation[];
+}
+
+// ==================== Knowledge-enabled Agent Types ====================
+export type AgentCategory =
+  | 'paper-reading'
+  | 'problem-decomposition'
+  | 'project-planning'
+  | 'code-reproduction'
+  | 'result-interpretation';
+
+export interface PublicAgent {
+  id: string;
+  name: string;
+  description?: string | null;
+  category: AgentCategory | string;
+  is_public: boolean;
+  created_at?: string;
+}
+
+export interface AgentKnowledgeAskRequest {
+  message: string;
+  collection_id?: string;
+  top_k?: number;
+}
+
+export interface AgentKnowledgeCitation {
+  index?: number;
+  document_id?: string;
+  chunk_id?: string;
+  title: string;
+  excerpt?: string;
+  content?: string;
+  source_url?: string | null;
+  file_name?: string | null;
+  score?: number;
+}
+
+export interface AgentKnowledgeAnswerResponse {
+  reply: string;
+  citations: AgentKnowledgeCitation[];
+  knowledge_used: boolean;
+  retrieval_id?: string | null;
+  agent: PublicAgent;
+}
+
 // ==================== UI Types ====================
 export interface Notification {
   id: string;

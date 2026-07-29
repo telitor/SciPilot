@@ -1,11 +1,12 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from services.xunfei_agent_service import call_agent_by_category
+from services.xunfei_agent_service import call_paper_reading_agent
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 LLM_API_KEY = os.getenv("LLM_API_KEY")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
@@ -64,19 +65,10 @@ def generate_reply(
         暂时调用默认 LLM 或 mock 回复。
     """
 
-    xunfei_agent_categories = {
-        "paper-reading",
-        "problem-decomposition",
-        "result-interpretation",
-        "code-reproduction",
-        "project-planning",
-    }
-
-    if agent_category in xunfei_agent_categories:
-        return call_agent_by_category(
+    if agent_category == "paper-reading":
+        return call_paper_reading_agent(
             user_id=user_id,
             user_message=user_message,
-            agent_category=agent_category,
         )
 
     return call_default_llm(

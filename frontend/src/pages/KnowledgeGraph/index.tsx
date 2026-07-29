@@ -1,19 +1,52 @@
-import { useState, useRef, useEffect, useCallback } from "react";
-import { Share2, Search, ZoomIn, ZoomOut, Maximize2, Info } from "lucide-react";
-import type { KGNode, KGEdge } from "@/types";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import axios from 'axios';
+import {
+  AlertCircle,
+  Info,
+  Loader2,
+  Maximize2,
+  RefreshCw,
+  Search,
+  Share2,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
+import { kgAPI } from '@/services/api';
+import type { KGEdge, KGNode, KnowledgeGraph as KnowledgeGraphData } from '@/types';
 
 const categoryColors: Record<string, string> = {
-  concept: "#38bdf8",
-  technique: "#8b5cf6",
-  dataset: "#10b981",
-  paper: "#f59e0b",
-  tool: "#ef4444",
+  concept: '#38bdf8',
+  technique: '#8b5cf6',
+  dataset: '#10b981',
+  paper: '#f59e0b',
+  tool: '#ef4444',
 };
 
-function KnowledgeGraphCanvas() {
+const categoryLabels: Record<string, string> = {
+  concept: '概念',
+  technique: '技术',
+  dataset: '数据集',
+  paper: '论文',
+  tool: '工具',
+};
+
+function getErrorMessage(error: unknown) {
+  if (axios.isAxiosError(error)) {
+    return (
+      (error.response?.data as { detail?: string } | undefined)?.detail ||
+      '知识图谱加载失败，请检查数据库迁移和后端服务。'
+    );
+  }
+  return '知识图谱加载失败，请检查数据库迁移和后端服务。';
+}
+
+function KnowledgeGraphCanvas({
+  graph,
+}: {
+  graph: KnowledgeGraphData;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [nodes, setNodes] = useState<KGNode[]>([]);
-  const [edges] = useState<KGEdge[]>([]);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState<string | null>(null);
@@ -21,134 +54,153 @@ function KnowledgeGraphCanvas() {
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
 
+  useEffect(() => {
+    setNodes((previous) =>
+      graph.nodes.map((node, index) => {
+        const existing = previous.find((item) => item.id === node.id);
+        if (existing?.x != null && existing.y != null) {
+          return { ...node, x: existing.x, y: existing.y };
+        }
+        const angle = (index / Math.max(graph.nodes.length, 1)) * Math.PI * 2;
+        const ring = graph.nodes.length > 14 ? 225 : 190;
+        return {
+          ...node,
+          x: 400 + Math.cos(angle) * ring,
+          y: 300 + Math.sin(angle) * ring,
+        };
+      })
+    );
+    setHoveredNode(null);
+  }, [graph.nodes]);
+
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const context = canvas.getContext('2d');
+    if (!context) return;
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    context.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw edges
-    edges.forEach((edge) => {
-      const source = nodes.find((n) => n.id === edge.source);
-      const target = nodes.find((n) => n.id === edge.target);
+    graph.edges.forEach((edge) => {
+      const source = nodes.find((node) => node.id === edge.source);
+      const target = nodes.find((node) => node.id === edge.target);
       if (
         !source ||
         !target ||
-        !source.x ||
-        !source.y ||
-        !target.x ||
-        !target.y
-      )
+        source.x == null ||
+        source.y == null ||
+        target.x == null ||
+        target.y == null
+      ) {
         return;
+      }
 
-      ctx.beginPath();
-      ctx.moveTo((source.x + offset.x) * scale, (source.y + offset.y) * scale);
-      ctx.lineTo((target.x + offset.x) * scale, (target.y + offset.y) * scale);
-      ctx.strokeStyle = `rgba(100, 116, 139, ${edge.strength || 0.5})`;
-      ctx.lineWidth = (edge.strength || 0.5) * 2;
-      ctx.stroke();
+      context.beginPath();
+      context.moveTo((source.x + offset.x) * scale, (source.y + offset.y) * scale);
+      context.lineTo((target.x + offset.x) * scale, (target.y + offset.y) * scale);
+      context.strokeStyle = `rgba(100, 116, 139, ${edge.strength || 0.5})`;
+      context.lineWidth = (edge.strength || 0.5) * 2;
+      context.stroke();
 
-      // Draw relation label
       const midX = ((source.x + target.x) / 2 + offset.x) * scale;
       const midY = ((source.y + target.y) / 2 + offset.y) * scale;
-      ctx.fillStyle = "#64748b";
-      ctx.font = "10px Inter";
-      ctx.textAlign = "center";
-      ctx.fillText(edge.relation, midX, midY);
+      context.fillStyle = '#64748b';
+      context.font = '10px Inter';
+      context.textAlign = 'center';
+      context.fillText(edge.relation, midX, midY);
     });
 
-    // Draw nodes
     nodes.forEach((node) => {
-      if (!node.x || !node.y) return;
+      if (node.x == null || node.y == null) return;
       const x = (node.x + offset.x) * scale;
       const y = (node.y + offset.y) * scale;
       const radius = 30 * scale;
+      const color = categoryColors[node.category] || '#38bdf8';
 
-      // Node circle
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fillStyle = "#0f172a";
-      ctx.fill();
-      ctx.strokeStyle = categoryColors[node.category] || "#38bdf8";
-      ctx.lineWidth = 2;
-      ctx.stroke();
+      context.beginPath();
+      context.arc(x, y, radius, 0, Math.PI * 2);
+      context.fillStyle = '#0f172a';
+      context.fill();
+      context.strokeStyle = color;
+      context.lineWidth = 2;
+      context.stroke();
 
-      // Glow effect
-      ctx.beginPath();
-      ctx.arc(x, y, radius + 4, 0, Math.PI * 2);
-      ctx.strokeStyle = `${categoryColors[node.category] || "#38bdf8"}33`;
-      ctx.lineWidth = 4;
-      ctx.stroke();
+      context.beginPath();
+      context.arc(x, y, radius + 4, 0, Math.PI * 2);
+      context.strokeStyle = `${color}33`;
+      context.lineWidth = 4;
+      context.stroke();
 
-      // Label
-      ctx.fillStyle = "#f1f5f9";
-      ctx.font = `bold ${12 * scale}px Inter`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(node.label, x, y);
+      context.fillStyle = '#f1f5f9';
+      context.font = `bold ${12 * scale}px Inter`;
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      const label = node.label.length > 16 ? `${node.label.slice(0, 14)}…` : node.label;
+      context.fillText(label, x, y);
 
-      // Category indicator
-      ctx.beginPath();
-      ctx.arc(x + radius * 0.7, y - radius * 0.7, 5 * scale, 0, Math.PI * 2);
-      ctx.fillStyle = categoryColors[node.category] || "#38bdf8";
-      ctx.fill();
+      context.beginPath();
+      context.arc(x + radius * 0.7, y - radius * 0.7, 5 * scale, 0, Math.PI * 2);
+      context.fillStyle = color;
+      context.fill();
     });
-  }, [nodes, edges, scale, offset]);
+  }, [graph.edges, nodes, offset, scale]);
 
   useEffect(() => {
     draw();
   }, [draw]);
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const x = (e.clientX - rect.left) / scale - offset.x;
-    const y = (e.clientY - rect.top) / scale - offset.y;
+  const canvasPoint = (event: React.MouseEvent) => {
+    const canvas = canvasRef.current;
+    const rect = canvas?.getBoundingClientRect();
+    if (!canvas || !rect) return null;
+    return {
+      x: (event.clientX - rect.left) * (canvas.width / rect.width),
+      y: (event.clientY - rect.top) * (canvas.height / rect.height),
+    };
+  };
 
-    const clickedNode = nodes.find((n) => {
-      if (!n.x || !n.y) return false;
-      const dx = n.x - x;
-      const dy = n.y - y;
-      return Math.sqrt(dx * dx + dy * dy) < 30;
+  const handleMouseDown = (event: React.MouseEvent) => {
+    const point = canvasPoint(event);
+    if (!point) return;
+    const x = point.x / scale - offset.x;
+    const y = point.y / scale - offset.y;
+    const clickedNode = nodes.find((node) => {
+      if (node.x == null || node.y == null) return false;
+      return Math.hypot(node.x - x, node.y - y) < 30;
     });
 
     if (clickedNode) {
       setDragging(clickedNode.id);
-    } else {
-      setIsPanning(true);
-      setPanStart({
-        x: e.clientX - offset.x * scale,
-        y: e.clientY - offset.y * scale,
-      });
+      return;
     }
+    setIsPanning(true);
+    setPanStart({
+      x: point.x - offset.x * scale,
+      y: point.y - offset.y * scale,
+    });
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const mouseX = (e.clientX - rect.left) / scale - offset.x;
-    const mouseY = (e.clientY - rect.top) / scale - offset.y;
-
-    const hovered = nodes.find((n) => {
-      if (!n.x || !n.y) return false;
-      const dx = n.x - mouseX;
-      const dy = n.y - mouseY;
-      return Math.sqrt(dx * dx + dy * dy) < 30;
+  const handleMouseMove = (event: React.MouseEvent) => {
+    const point = canvasPoint(event);
+    if (!point) return;
+    const graphX = point.x / scale - offset.x;
+    const graphY = point.y / scale - offset.y;
+    const hovered = nodes.find((node) => {
+      if (node.x == null || node.y == null) return false;
+      return Math.hypot(node.x - graphX, node.y - graphY) < 30;
     });
     setHoveredNode(hovered || null);
 
     if (dragging) {
-      setNodes((prev) =>
-        prev.map((n) =>
-          n.id === dragging ? { ...n, x: mouseX, y: mouseY } : n,
-        ),
+      setNodes((current) =>
+        current.map((node) =>
+          node.id === dragging ? { ...node, x: graphX, y: graphY } : node
+        )
       );
     } else if (isPanning) {
       setOffset({
-        x: (e.clientX - panStart.x) / scale,
-        y: (e.clientY - panStart.y) / scale,
+        x: (point.x - panStart.x) / scale,
+        y: (point.y - panStart.y) / scale,
       });
     }
   };
@@ -158,10 +210,9 @@ function KnowledgeGraphCanvas() {
     setIsPanning(false);
   };
 
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const newScale = Math.max(0.5, Math.min(2, scale - e.deltaY * 0.001));
-    setScale(newScale);
+  const handleWheel = (event: React.WheelEvent) => {
+    event.preventDefault();
+    setScale((current) => Math.max(0.5, Math.min(2, current - event.deltaY * 0.001)));
   };
 
   return (
@@ -170,7 +221,7 @@ function KnowledgeGraphCanvas() {
         ref={canvasRef}
         width={800}
         height={600}
-        className="w-full rounded-xl bg-sci-bg2 border border-sci-border cursor-grab active:cursor-grabbing"
+        className="w-full rounded-xl border border-sci-border bg-sci-bg2 cursor-grab active:cursor-grabbing"
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -179,53 +230,57 @@ function KnowledgeGraphCanvas() {
       />
 
       {nodes.length === 0 && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
-          <div className="max-w-md rounded-xl border border-sci-border bg-sci-bg2/90 p-6 text-center backdrop-blur-sm">
-            <Share2 size={28} className="mx-auto mb-3 text-sci-muted" />
-            <h2 className="font-semibold text-sci-ink">暂无知识图谱数据</h2>
-            <p className="mt-2 text-sm text-sci-muted">
-              知识图谱接口尚未接入，接入后将在此展示真实节点与关系。
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="max-w-sm rounded-xl border border-sci-border bg-sci-bg2/95 p-5 text-center">
+            <Share2 size={32} className="mx-auto mb-3 text-sci-border" />
+            <p className="font-medium">暂无可显示的知识节点</p>
+            <p className="mt-1 text-sm text-sci-muted">
+              可清除搜索条件，或先导入并整理知识库资料。
             </p>
           </div>
         </div>
       )}
 
-      {/* Controls */}
-      <div className="absolute top-4 right-4 flex flex-col gap-2">
+      <div className="absolute right-4 top-4 flex flex-col gap-2">
         <button
-          onClick={() => setScale((s) => Math.min(2, s + 0.1))}
-          className="p-2 rounded-lg bg-sci-bg2 border border-sci-border hover:bg-sci-bg3 text-sci-muted"
+          type="button"
+          onClick={() => setScale((current) => Math.min(2, current + 0.1))}
+          className="rounded-lg border border-sci-border bg-sci-bg2 p-2 text-sci-muted hover:bg-sci-bg3"
+          title="放大"
         >
           <ZoomIn size={16} />
         </button>
         <button
-          onClick={() => setScale((s) => Math.max(0.5, s - 0.1))}
-          className="p-2 rounded-lg bg-sci-bg2 border border-sci-border hover:bg-sci-bg3 text-sci-muted"
+          type="button"
+          onClick={() => setScale((current) => Math.max(0.5, current - 0.1))}
+          className="rounded-lg border border-sci-border bg-sci-bg2 p-2 text-sci-muted hover:bg-sci-bg3"
+          title="缩小"
         >
           <ZoomOut size={16} />
         </button>
         <button
+          type="button"
           onClick={() => {
             setScale(1);
             setOffset({ x: 0, y: 0 });
           }}
-          className="p-2 rounded-lg bg-sci-bg2 border border-sci-border hover:bg-sci-bg3 text-sci-muted"
+          className="rounded-lg border border-sci-border bg-sci-bg2 p-2 text-sci-muted hover:bg-sci-bg3"
+          title="重置视图"
         >
           <Maximize2 size={16} />
         </button>
       </div>
 
-      {/* Node Info */}
       {hoveredNode && (
-        <div className="absolute bottom-4 left-4 sci-card max-w-xs animate-fade-in">
-          <div className="flex items-center gap-2 mb-2">
+        <div className="sci-card absolute bottom-4 left-4 max-w-xs animate-fade-in">
+          <div className="mb-2 flex items-center gap-2">
             <div
-              className="w-3 h-3 rounded-full"
-              style={{ backgroundColor: categoryColors[hoveredNode.category] }}
+              className="h-3 w-3 rounded-full"
+              style={{ backgroundColor: categoryColors[hoveredNode.category] || '#38bdf8' }}
             />
             <span className="font-semibold">{hoveredNode.label}</span>
           </div>
-          <p className="text-sm text-sci-muted">{hoveredNode.description}</p>
+          <p className="text-sm text-sci-muted">{hoveredNode.description || '暂无节点说明'}</p>
         </div>
       )}
     </div>
@@ -233,102 +288,231 @@ function KnowledgeGraphCanvas() {
 }
 
 function KnowledgeGraph() {
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState('');
+  const [fullGraph, setFullGraph] = useState<KnowledgeGraphData>({ nodes: [], edges: [] });
+  const [visibleGraph, setVisibleGraph] = useState<KnowledgeGraphData>({ nodes: [], edges: [] });
+  const [loading, setLoading] = useState(true);
+  const [searching, setSearching] = useState(false);
+  const [error, setError] = useState('');
+  const [hasSearched, setHasSearched] = useState(false);
+
+  const loadGraph = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    setHasSearched(false);
+    try {
+      const response = await kgAPI.getGraph({ limit: 500 });
+      const graph: KnowledgeGraphData = {
+        nodes: response.data.nodes ?? [],
+        edges: response.data.edges ?? [],
+      };
+      setFullGraph(graph);
+      setVisibleGraph(graph);
+    } catch (requestError) {
+      setFullGraph({ nodes: [], edges: [] });
+      setVisibleGraph({ nodes: [], edges: [] });
+      setError(getErrorMessage(requestError));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadGraph();
+  }, [loadGraph]);
+
+  const handleSearch = async (event: FormEvent) => {
+    event.preventDefault();
+    const query = searchQuery.trim();
+    if (!query) {
+      setVisibleGraph(fullGraph);
+      setHasSearched(false);
+      setError('');
+      return;
+    }
+
+    setSearching(true);
+    setError('');
+    try {
+      const response = await kgAPI.searchNodes(query);
+      const matchedNodes = (Array.isArray(response.data)
+        ? response.data
+        : response.data.items ?? []) as KGNode[];
+      const matchedIds = new Set(matchedNodes.map((node) => node.id));
+      const matchedEdges = fullGraph.edges.filter(
+        (edge) => matchedIds.has(edge.source) && matchedIds.has(edge.target)
+      );
+      setVisibleGraph({ nodes: matchedNodes, edges: matchedEdges });
+      setHasSearched(true);
+    } catch (requestError) {
+      setVisibleGraph({ nodes: [], edges: [] });
+      setHasSearched(true);
+      setError(getErrorMessage(requestError));
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const categories = useMemo(
+    () => Array.from(new Set(fullGraph.nodes.map((node) => node.category))),
+    [fullGraph.nodes]
+  );
+
+  const relationCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    fullGraph.edges.forEach((edge: KGEdge) => {
+      counts.set(edge.relation, (counts.get(edge.relation) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .sort((left, right) => right[1] - left[1])
+      .slice(0, 4);
+  }, [fullGraph.edges]);
 
   return (
     <div className="space-y-6 pb-20 md:pb-0">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">知识图谱</h1>
-        <div className="flex items-center gap-3">
-          <div className="relative">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">知识图谱</h1>
+          <p className="mt-1 text-sm text-sci-muted">
+            展示科研概念、论文、技术、数据集与工具之间的结构化关系。
+          </p>
+        </div>
+        <form onSubmit={handleSearch} className="flex w-full gap-2 lg:w-auto">
+          <div className="relative flex-1 lg:w-72">
             <Search
               size={16}
               className="absolute left-3 top-1/2 -translate-y-1/2 text-sci-muted"
             />
             <input
-              type="text"
+              type="search"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="知识图谱接口尚未接入"
-              disabled
-              className="sci-input pl-10 w-64"
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="搜索概念或节点..."
+              className="sci-input w-full pl-10"
             />
           </div>
-        </div>
+          <button type="submit" className="sci-btn-primary" disabled={searching}>
+            {searching ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+            搜索
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSearchQuery('');
+              setVisibleGraph(fullGraph);
+              setHasSearched(false);
+              setError('');
+            }}
+            className="sci-btn-secondary"
+            title="清除搜索"
+          >
+            重置
+          </button>
+        </form>
       </div>
 
-      {/* Legend */}
-      <div className="flex items-center gap-4 flex-wrap">
-        {Object.entries(categoryColors).map(([category, color]) => (
-          <div key={category} className="flex items-center gap-2">
-            <div
-              className="w-3 h-3 rounded-full"
-              style={{ backgroundColor: color }}
-            />
-            <span className="text-sm text-sci-muted capitalize">
-              {category === "concept"
-                ? "概念"
-                : category === "technique"
-                  ? "技术"
-                  : category === "dataset"
-                    ? "数据集"
-                    : category === "paper"
-                      ? "论文"
-                      : "工具"}
+      {loading && (
+        <div className="sci-card flex items-center gap-3 text-sm text-sci-muted">
+          <Loader2 size={18} className="animate-spin text-sci-accent" />
+          正在读取知识节点与关系...
+        </div>
+      )}
+
+      {error && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5">
+          <div className="flex items-start gap-3">
+            <AlertCircle size={20} className="mt-0.5 flex-shrink-0 text-sci-warning" />
+            <div className="flex-1">
+              <h2 className="font-semibold text-sci-warning">知识图谱暂不可用</h2>
+              <p className="mt-1 text-sm text-sci-muted">{error}</p>
+              <p className="mt-2 text-xs text-sci-muted">
+                若数据库尚未初始化，请依次执行 006_workspace_data_layer.sql 和
+                007_seed_public_research_catalog.sql。
+              </p>
+              <button type="button" onClick={() => void loadGraph()} className="sci-btn-secondary mt-4">
+                <RefreshCw size={15} />
+                重新加载
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!loading && !error && (
+        <>
+          <div className="flex flex-wrap items-center gap-4">
+            {categories.map((category) => (
+              <div key={category} className="flex items-center gap-2">
+                <div
+                  className="h-3 w-3 rounded-full"
+                  style={{ backgroundColor: categoryColors[category] || '#38bdf8' }}
+                />
+                <span className="text-sm text-sci-muted">
+                  {categoryLabels[category] || category}
+                </span>
+              </div>
+            ))}
+            <span className="ml-auto text-xs text-sci-muted">
+              {hasSearched ? `搜索命中 ${visibleGraph.nodes.length} 个节点` : ''}
             </span>
           </div>
-        ))}
-      </div>
 
-      {/* Graph Canvas */}
-      <KnowledgeGraphCanvas />
+          <KnowledgeGraphCanvas graph={visibleGraph} />
 
-      {/* Info Panel */}
-      <div className="grid md:grid-cols-3 gap-4">
-        <div className="sci-card">
-          <div className="flex items-center gap-2 mb-3">
-            <Share2 size={16} className="text-sci-accent" />
-            <h3 className="font-semibold">关系类型</h3>
-          </div>
-          <div className="space-y-2 text-sm text-sci-muted">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-px bg-sci-border" />
-              <span>represented_by - 表示为</span>
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="sci-card">
+              <div className="mb-3 flex items-center gap-2">
+                <Share2 size={16} className="text-sci-accent" />
+                <h3 className="font-semibold">关系类型</h3>
+              </div>
+              <div className="space-y-2 text-sm text-sci-muted">
+                {relationCounts.map(([relation, count]) => (
+                  <div key={relation} className="flex items-center gap-2">
+                    <div className="h-px w-8 bg-sci-border" />
+                    <span className="min-w-0 flex-1 truncate">{relation}</span>
+                    <span>{count}</span>
+                  </div>
+                ))}
+                {relationCounts.length === 0 && <p>暂无关系数据</p>}
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-px bg-sci-border" />
-              <span>detected_by - 被检测</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-px bg-sci-border" />
-              <span>input_to - 输入到</span>
-            </div>
-          </div>
-        </div>
 
-        <div className="sci-card">
-          <div className="flex items-center gap-2 mb-3">
-            <Info size={16} className="text-sci-accent" />
-            <h3 className="font-semibold">使用说明</h3>
-          </div>
-          <ul className="space-y-1 text-sm text-sci-muted">
-            <li>拖拽节点可调整位置</li>
-            <li>滚轮缩放画布</li>
-            <li>悬停查看节点详情</li>
-            <li>拖拽空白处平移画布</li>
-          </ul>
-        </div>
+            <div className="sci-card">
+              <div className="mb-3 flex items-center gap-2">
+                <Info size={16} className="text-sci-accent" />
+                <h3 className="font-semibold">使用说明</h3>
+              </div>
+              <ul className="space-y-1 text-sm text-sci-muted">
+                <li>拖拽节点可调整位置</li>
+                <li>滚轮缩放画布</li>
+                <li>悬停查看节点详情</li>
+                <li>拖拽空白处平移画布</li>
+              </ul>
+            </div>
 
-        <div className="sci-card">
-          <div className="flex items-center gap-2 mb-3">
-            <Search size={16} className="text-sci-accent" />
-            <h3 className="font-semibold">接口状态</h3>
+            <div className="sci-card">
+              <div className="mb-3 flex items-center gap-2">
+                <Search size={16} className="text-sci-accent" />
+                <h3 className="font-semibold">图谱状态</h3>
+              </div>
+              <div className="space-y-2 text-sm text-sci-muted">
+                <div className="flex justify-between">
+                  <span>节点</span>
+                  <strong className="text-sci-ink">{fullGraph.nodes.length}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span>关系</span>
+                  <strong className="text-sci-ink">{fullGraph.edges.length}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span>类别</span>
+                  <strong className="text-sci-ink">{categories.length}</strong>
+                </div>
+              </div>
+            </div>
           </div>
-          <p className="text-sm text-sci-muted">
-            尚未连接知识图谱数据源，当前页面不会生成或展示模拟节点。
-          </p>
-        </div>
-      </div>
+        </>
+      )}
     </div>
   );
 }

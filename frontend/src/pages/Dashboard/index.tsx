@@ -1,109 +1,57 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
-  AlertCircle,
+  FileText,
+  GitBranch,
+  Route,
   Clock,
-  Loader2,
-  MessageSquare,
-  RefreshCw,
-} from "lucide-react";
-import { useAuthStore } from "@/store/authStore";
-import { conversationAPI, getErrorMessage } from "@/services/api";
-import ResearchLauncher from "@/components/ResearchLauncher";
+  Star,
+  TrendingUp,
+} from 'lucide-react';
+import { useAuthStore } from '@/store/authStore';
+import { dashboardAPI } from '@/services/api';
+import { usePaperStore } from '@/store/paperStore';
+import type { Paper } from '@/types';
+import ResearchLauncher from '@/components/ResearchLauncher';
 
-interface ConversationSummary {
-  id: string;
-  title: string;
-  created_at: string;
-  updated_at: string;
-}
-
-function isConversationSummary(value: unknown): value is ConversationSummary {
-  if (!value || typeof value !== "object") return false;
-
-  const item = value as Record<string, unknown>;
-  return (
-    typeof item.id === "string" &&
-    typeof item.title === "string" &&
-    typeof item.created_at === "string" &&
-    typeof item.updated_at === "string"
-  );
-}
-
-function formatDate(value: string, includeTime = true) {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) return "时间未知";
-
-  return date.toLocaleString(
-    "zh-CN",
-    includeTime
-      ? {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-        }
-      : { year: "numeric", month: "short", day: "numeric" },
-  );
+interface DashboardSummary {
+  stats: {
+    paper_count: number;
+    experiment_count: number;
+    code_reproduction_count: number;
+  };
+  recent_papers: Paper[];
+  recent_activities: Array<{
+    id: string;
+    action: string;
+    target: string;
+    module: string;
+    created_at: string;
+  }>;
+  trending: Array<{ title: string; papers: number; trend: string }>;
 }
 
 function Dashboard() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
-  const handleNavigate = useCallback(
-    (path: string) => navigate(path),
-    [navigate],
-  );
-
-  const loadConversations = useCallback(async () => {
-    setIsLoading(true);
-    setLoadError("");
-
-    try {
-      const response = await conversationAPI.getConversations();
-      const records = Array.isArray(response.data)
-        ? response.data.filter(isConversationSummary)
-        : [];
-
-      records.sort(
-        (left, right) =>
-          Date.parse(right.updated_at) - Date.parse(left.updated_at),
-      );
-      setConversations(records);
-    } catch (error) {
-      setConversations([]);
-      setLoadError(getErrorMessage(error, "会话记录加载超时，请稍后重试。"));
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const setCurrentPaper = usePaperStore((state) => state.setCurrentPaper);
+  const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const papers = summary?.recent_papers ?? [];
+  const handleNavigate = useCallback((path: string) => navigate(path), [navigate]);
 
   useEffect(() => {
-    void loadConversations();
-  }, [loadConversations]);
-
-  const recentlyUpdatedCount = useMemo(() => {
-    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-
-    return conversations.filter((conversation) => {
-      const updatedAt = Date.parse(conversation.updated_at);
-      return !Number.isNaN(updatedAt) && updatedAt >= sevenDaysAgo;
-    }).length;
-  }, [conversations]);
-
-  const latestConversation = conversations[0];
+    dashboardAPI
+      .getSummary()
+      .then((response) => setSummary(response.data))
+      .catch(() => undefined);
+  }, []);
 
   return (
     <div className="space-y-6 pb-20 md:pb-0">
       <div className="dashboard-launcher-heading">
         <div>
           <span>研究工作区 / main</span>
-          <h1>欢迎回来，{user?.username || "研究者"}</h1>
+          <h1>欢迎回来，{user?.username || '研究者'}</h1>
         </div>
         <p>选择一个模块，继续构建今天的研究提交。</p>
       </div>
@@ -111,119 +59,117 @@ function Dashboard() {
       <ResearchLauncher compact initialIndex={2} onNavigate={handleNavigate} />
 
       <div className="grid lg:grid-cols-3 gap-6">
-        <section className="lg:col-span-2">
-          <div className="flex items-center justify-between gap-4 mb-4">
-            <h2 className="sci-section-title">最近会话</h2>
-            {!isLoading && (
-              <button
-                type="button"
-                onClick={() => void loadConversations()}
-                className="inline-flex items-center gap-1.5 text-xs text-sci-muted hover:text-sci-accent transition-colors"
+        {/* Recent Papers */}
+        <div className="lg:col-span-2">
+          <h2 className="sci-section-title mb-4">最近论文</h2>
+          <div className="space-y-3">
+            {papers.map((paper) => (
+              <div
+                key={paper.id}
+                onClick={() => {
+                  setCurrentPaper(paper);
+                  navigate('/paper/read');
+                }}
+                className="sci-card cursor-pointer group"
               >
-                <RefreshCw size={13} />
-                刷新
-              </button>
-            )}
-          </div>
-
-          {isLoading ? (
-            <div className="sci-card min-h-48 flex flex-col items-center justify-center text-sci-muted">
-              <Loader2
-                size={24}
-                className="animate-spin text-sci-accent mb-3"
-              />
-              <p className="text-sm">正在读取真实会话记录…</p>
-            </div>
-          ) : loadError ? (
-            <div className="sci-card min-h-48 flex flex-col items-center justify-center text-center">
-              <AlertCircle size={24} className="text-sci-warning mb-3" />
-              <p className="font-medium">会话记录加载失败</p>
-              <p className="text-sm text-sci-muted mt-1 max-w-md">
-                {loadError}
-              </p>
-              <button
-                type="button"
-                onClick={() => void loadConversations()}
-                className="sci-btn-secondary mt-4"
-              >
-                重新加载
-              </button>
-            </div>
-          ) : conversations.length === 0 ? (
-            <div className="sci-card min-h-48 flex flex-col items-center justify-center text-center">
-              <MessageSquare size={24} className="text-sci-muted mb-3" />
-              <p className="font-medium">尚无会话数据</p>
-              <p className="text-sm text-sci-muted mt-1">
-                从上方选择研究模块并开始一次真实对话后，记录会显示在这里。
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {conversations.slice(0, 6).map((conversation) => (
-                <article key={conversation.id} className="sci-card">
-                  <div className="flex items-start gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-sci-bg3 flex items-center justify-center flex-shrink-0">
-                      <MessageSquare size={16} className="text-sci-accent" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="font-semibold truncate">
-                        {conversation.title.trim() || "未命名会话"}
-                      </h3>
-                      <p className="text-xs text-sci-muted mt-1 flex items-center gap-1.5">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <h3 className="font-semibold group-hover:text-sci-accent transition-colors">
+                      {paper.title}
+                    </h3>
+                    <p className="text-sm text-sci-muted mt-1">{paper.authors.join(', ')}</p>
+                    <div className="flex items-center gap-3 mt-2">
+                      <span className="sci-badge-info">{paper.arxiv_id}</span>
+                      <span className="text-xs text-sci-muted flex items-center gap-1">
                         <Clock size={12} />
-                        更新于 {formatDate(conversation.updated_at)}
-                      </p>
+                        {new Date(paper.uploaded_at).toLocaleDateString('zh-CN')}
+                      </span>
                     </div>
                   </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
+                  <Star size={18} className="text-sci-muted hover:text-sci-warning cursor-pointer" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
 
-        <aside className="space-y-6">
+        {/* Sidebar Content */}
+        <div className="space-y-6">
+          {/* Stats */}
           <div>
-            <h2 className="sci-section-title mb-4">工作区概览</h2>
+            <h2 className="sci-section-title mb-4">学习进度</h2>
             <div className="sci-card space-y-4">
-              <div className="flex items-center justify-between gap-4">
-                <span className="text-sm text-sci-muted">会话总数</span>
-                <span className="text-xl font-semibold text-sci-accent">
-                  {isLoading || loadError ? "—" : conversations.length}
-                </span>
-              </div>
-              <div className="h-px bg-sci-border" />
-              <div className="flex items-center justify-between gap-4">
-                <span className="text-sm text-sci-muted">近 7 天更新</span>
-                <span className="text-xl font-semibold text-sci-success">
-                  {isLoading || loadError ? "—" : recentlyUpdatedCount}
-                </span>
-              </div>
-              <div className="h-px bg-sci-border" />
               <div>
-                <p className="text-sm text-sci-muted">最近同步</p>
-                <p className="text-sm font-medium mt-1">
-                  {isLoading
-                    ? "正在加载"
-                    : loadError
-                      ? "加载失败"
-                      : latestConversation
-                        ? formatDate(latestConversation.updated_at, false)
-                        : "尚无数据"}
-                </p>
+                <div className="flex items-center justify-between text-sm mb-2">
+                  <span className="text-sci-muted">本周论文</span>
+                  <span className="text-sci-accent font-semibold">{summary?.stats.paper_count ?? 0}</span>
+                </div>
+                <div className="h-2 bg-sci-bg3 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-sci-primary to-sci-accent rounded-full" style={{ width: `${Math.min(100, (summary?.stats.paper_count ?? 0) * 10)}%` }} />
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between text-sm mb-2">
+                  <span className="text-sci-muted">实验完成度</span>
+                  <span className="text-sci-success font-semibold">{summary?.stats.experiment_count ?? 0}</span>
+                </div>
+                <div className="h-2 bg-sci-bg3 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-sci-success to-emerald-400 rounded-full" style={{ width: `${Math.min(100, (summary?.stats.experiment_count ?? 0) * 20)}%` }} />
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between text-sm mb-2">
+                  <span className="text-sci-muted">代码复现</span>
+                  <span className="text-sci-warning font-semibold">{summary?.stats.code_reproduction_count ?? 0}</span>
+                </div>
+                <div className="h-2 bg-sci-bg3 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-sci-warning to-amber-400 rounded-full" style={{ width: `${Math.min(100, (summary?.stats.code_reproduction_count ?? 0) * 20)}%` }} />
+                </div>
               </div>
             </div>
           </div>
 
+          {/* Recent Activity */}
           <div>
-            <h2 className="sci-section-title mb-4">数据说明</h2>
-            <div className="sci-card">
-              <p className="text-sm text-sci-muted leading-6">
-                当前仅展示后端已经提供的真实会话数据。论文统计、学习进度和研究趋势尚未接入，
-                因此不会用示例内容代替。
-              </p>
+            <h2 className="sci-section-title mb-4">最近活动</h2>
+            <div className="sci-card space-y-4">
+              {(summary?.recent_activities ?? []).map((activity) => {
+                const Icon = activity.module === 'paper' ? FileText : activity.module === 'experiment' ? Route : GitBranch;
+                return (
+                  <div key={activity.id} className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-sci-bg3 flex items-center justify-center flex-shrink-0">
+                      <Icon size={14} className="text-sci-accent" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium">{activity.action}</p>
+                      <p className="text-xs text-sci-muted truncate">{activity.target}</p>
+                      <p className="text-xs text-sci-muted mt-1">{new Date(activity.created_at).toLocaleString('zh-CN')}</p>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
-        </aside>
+        </div>
+      </div>
+
+      {/* Trending */}
+      <div>
+        <h2 className="sci-section-title mb-4">热门研究方向</h2>
+        <div className="grid md:grid-cols-3 gap-4">
+          {(summary?.trending ?? []).slice(0, 3).map((item) => (
+            <div key={item.title} className="sci-card group cursor-pointer">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="font-medium group-hover:text-sci-accent transition-colors">{item.title}</h3>
+                <TrendingUp size={16} className="text-sci-success" />
+              </div>
+              <div className="flex items-center gap-4 text-sm text-sci-muted">
+                <span>公开资料 {item.papers} 条</span>
+                <span className="text-sci-success">{item.trend}</span>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

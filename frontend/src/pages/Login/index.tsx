@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import type { AxiosError } from 'axios';
 import { Eye, EyeOff, FlaskConical, ArrowLeft } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
@@ -26,16 +27,14 @@ function Login() {
     try {
       const response = await authAPI.login(email, password);
       const { user, token } = response.data;
-
-      if (!token) {
-        throw new Error('Login response missing token');
-      }
-
       login(user, token);
       addNotification({ type: 'success', message: '登录成功', duration: 3000 });
       navigate('/dashboard');
-    } catch {
-      addNotification({ type: 'error', message: '登录失败，请检查账号密码', duration: 5000 });
+    } catch (error) {
+      const message =
+        (error as AxiosError<{ detail?: string }>).response?.data?.detail ||
+        '登录失败，请检查账号密码';
+      addNotification({ type: 'error', message, duration: 5000 });
     } finally {
       setIsLoading(false);
     }

@@ -11,6 +11,7 @@ import ResearchDecompose from '@/pages/ResearchDecompose';
 import ExperimentRoadmap from '@/pages/ExperimentRoadmap';
 import CodeReproduce from '@/pages/CodeReproduce';
 import ResultAnalyze from '@/pages/ResultAnalyze';
+import KnowledgeBase from '@/pages/KnowledgeBase';
 import KnowledgeGraph from '@/pages/KnowledgeGraph';
 import Profile from '@/pages/Profile';
 
@@ -33,6 +34,7 @@ function App() {
         <Route path="/experiment/roadmap" element={<RequireAuth><ExperimentRoadmap /></RequireAuth>} />
         <Route path="/code/reproduce" element={<RequireAuth><CodeReproduce /></RequireAuth>} />
         <Route path="/result/analyze" element={<RequireAuth><ResultAnalyze /></RequireAuth>} />
+        <Route path="/knowledge" element={<RequireAuth><KnowledgeBase /></RequireAuth>} />
         <Route path="/kg/explore" element={<RequireAuth><KnowledgeGraph /></RequireAuth>} />
         <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
       </Route>

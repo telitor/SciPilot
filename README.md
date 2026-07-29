@@ -845,7 +845,40 @@ flowchart LR
 | Independent Agent Routing | READY |
 | PDF Analysis Pipeline | READY |
 | Supabase RLS | ENABLED |
+| Software Engineering Knowledge Base | READY |
+| Five-Agent Grounded Retrieval | PASSED |
+| Two-Account Knowledge RLS E2E | PASSED |
 | Frontend Production Build | PASSED |
+
+### 12.1 · Knowledge Base / 软件工程知识库
+
+数据库与知识库在原有 `001`—`005` 迁移基础上增量完成：
+
+- `006_workspace_data_layer.sql`：论文、报告、研究产物、活动、公共目录、知识图谱与私有 Storage。
+- `007_seed_public_research_catalog.sql`：7 条公共科研资源、15 个知识节点、14 条关系。
+- `008_knowledge_base.sql`：集合、文档、切块、入库任务、检索、引用、RLS、全文/向量搜索 RPC。
+- `seed_software_engineering_kb.py`：12 条合规的原创中文软件工程知识卡，只保存题录、官方链接和原创摘要。
+- KnowledgeBase 前端：集合、PDF/TXT/Markdown/文本入库、去重、全文/混合检索、引用式问答。
+- Five-Agent RAG：五个功能页面都能调用对应 Agent，并显示知识命中、来源片段、链接和检索审计编号。
+
+```text
+User Question
+  -> FastAPI JWT / Ownership Check
+  -> Public + Private Knowledge Retrieval
+  -> Five-Agent Grounded Answer
+  -> [n] Citations
+  -> kb_retrievals / kb_citations Audit
+```
+
+当前种子状态：`1 collection / 12 documents / 12 chunks`。未配置 Embedding 或 LLM 时，
+系统仍使用 PostgreSQL 全文与中文模糊检索，并返回可核查的证据摘录；配置 1536 维
+Embedding 后自动升级为 pgvector 混合检索。
+
+详细部署、使用与验收见：
+
+- `docs/DATABASE_GUIDE.md`
+- `docs/KNOWLEDGE_BASE_GUIDE.md`
+- `docs/SciPilot知识库与数据库实施交付说明.docx`
 
 ---
 
