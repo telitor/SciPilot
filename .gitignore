@@ -2,21 +2,46 @@
 .env
 .env.*
 !.env.example
+.env.local
+frontend/.env.local
 backend/.env
 frontend/.env
 
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+.Python
 .venv/
 venv/
+backend/.venv/
 .pytest_cache/
 
-# Frontend
+# FastAPI / logs
+*.log
+
+# Node / Frontend
+node_modules/
 frontend/node_modules/
+dist/
 frontend/dist/
+build/
+out/
+.next/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Supabase local files
+.supabase/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
 
 # Local tooling and generated work
 .repo-sync/
 work/
-*.log
