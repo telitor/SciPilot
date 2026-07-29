@@ -640,25 +640,106 @@ def health():
 # ---------------------------------------------------------------------------
 
 
+def _auth_auto_confirm_email_enabled() -> bool:
+    return os.getenv("AUTH_AUTO_CONFIRM_EMAIL", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _registration_error(exc: Exception) -> HTTPException:
+    message = str(exc).lower()
+    if any(
+        marker in message
+        for marker in (
+            "already registered",
+            "already been registered",
+            "already exists",
+            "user already registered",
+        )
+    ):
+        return HTTPException(status_code=409, detail="该邮箱已经注册，请直接登录")
+    if "rate limit" in message or "too many" in message:
+        return HTTPException(status_code=429, detail="注册请求过于频繁，请稍后再试")
+    if "password" in message or "weak_password" in message:
+        return HTTPException(
+            status_code=400,
+            detail="密码不符合 Supabase 的安全要求",
+        )
+    if "email" in message or "invalid" in message:
+        return HTTPException(status_code=400, detail="邮箱格式无效或不被接受")
+    return HTTPException(status_code=400, detail="注册失败，请稍后再试")
+
+
 @router.post("/auth/register")
 def register(payload: RegisterRequest):
-    try:
-        response = get_supabase_auth_client().auth.sign_up(
-            {
-                "email": payload.email.strip().lower(),
-                "password": payload.password,
-                "options": {"data": {"username": payload.username, "role": "user"}},
-            }
+    email = payload.email.strip().lower()
+    auth_client = get_supabase_auth_client()
+    auto_confirm = _auth_auto_confirm_email_enabled()
+    created_user_id: str | None = None
+
+    if auto_confirm:
+        try:
+            created = database().auth.admin.create_user(
+                {
+                    "email": email,
+                    "password": payload.password,
+                    "email_confirm": True,
+                    "user_metadata": {
+                        "username": payload.username,
+                        "role": "user",
+                    },
+                }
+            )
+        except Exception as exc:
+            raise _registration_error(exc) from None
+        if not created.user:
+            raise HTTPException(status_code=500, detail="注册服务未返回用户")
+        created_user_id = str(created.user.id)
+        try:
+            response = auth_client.auth.sign_in_with_password(
+                {"email": email, "password": payload.password}
+            )
+        except Exception:
+            # Do not leave an unusable account behind if the automatic
+            # sign-in step unexpectedly fails immediately after creation.
+            try:
+                database().auth.admin.delete_user(created_user_id)
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=502,
+                detail="账号已创建但自动登录失败，请重新注册",
+            ) from None
+    else:
+        try:
+            response = auth_client.auth.sign_up(
+                {
+                    "email": email,
+                    "password": payload.password,
+                    "options": {
+                        "data": {
+                            "username": payload.username,
+                            "role": "user",
+                        }
+                    },
+                }
+            )
+        except Exception as exc:
+            raise _registration_error(exc) from None
+
+    if auto_confirm and (not response.user or not response.session):
+        try:
+            if created_user_id:
+                database().auth.admin.delete_user(created_user_id)
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=502,
+            detail="账号已创建但自动登录失败，请重新注册",
         )
-    except Exception as exc:
-        message = str(exc).lower()
-        if "already registered" in message or "already exists" in message:
-            raise HTTPException(status_code=409, detail="该邮箱已经注册，请直接登录") from None
-        if "rate limit" in message or "too many" in message:
-            raise HTTPException(status_code=429, detail="注册请求过于频繁，请稍后再试") from None
-        if "password" in message:
-            raise HTTPException(status_code=400, detail="密码不符合 Supabase 的安全要求") from None
-        raise HTTPException(status_code=400, detail="注册失败，请检查邮箱格式或稍后重试") from None
     if not response.user:
         raise HTTPException(status_code=400, detail="注册失败")
 
@@ -682,7 +763,7 @@ def register(payload: RegisterRequest):
     return {
         "user": format_user(response.user, profile_payload),
         "token": token,
-        "requires_email_confirmation": token is None,
+        "requires_email_confirmation": False if auto_confirm else token is None,
     }
 
 

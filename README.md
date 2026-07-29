@@ -749,6 +749,9 @@ SUPABASE_URL=your_supabase_url
 SUPABASE_ANON_KEY=your_supabase_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 
+# 试运行：注册后自动确认并立即登录，不发送验证邮件
+AUTH_AUTO_CONFIRM_EMAIL=true
+
 # Paper Reading Agent
 XF_AGENT_APP_ID=your_app_id
 XF_AGENT_API_KEY=your_api_key
@@ -783,10 +786,13 @@ PROJECT_PLANNING_WS_URL=wss://your_websocket_url
 Frontend：
 
 ```env
-VITE_API_BASE_URL=http://localhost:8000
-VITE_SUPABASE_URL=your_supabase_url
-VITE_SUPABASE_ANON_KEY=your_anon_key
+VITE_API_BASE_URL=http://localhost:8000/api/v1
 ```
+
+`AUTH_AUTO_CONFIRM_EMAIL=true` 适用于当前试运行：FastAPI 在服务器端创建已确认的
+Supabase Auth 用户，再使用 Publishable/Anon 权限换取该用户自己的 JWT；Service
+Role Key 不会进入浏览器。公开生产环境如需验证邮箱所有权，请配置自有 SMTP 并将此
+开关改为 `false`。
 
 > [!CAUTION]
 > `.env` 文件、真实密钥与接口鉴权信息不得提交至 GitHub。

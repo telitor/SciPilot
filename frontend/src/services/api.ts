@@ -1,6 +1,7 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
+import { getApiErrorMessage } from '@/services/errors';
 import type {
   AgentKnowledgeAnswerResponse,
   AgentKnowledgeAskRequest,
@@ -42,7 +43,7 @@ apiClient.interceptors.response.use(
       useAuthStore.getState().logout();
       window.location.href = '/login';
     }
-    const message = (error.response?.data as { detail?: string })?.detail || error.message;
+    const message = getApiErrorMessage(error);
     if (!isAuthRequest) {
       useUIStore.getState().addNotification({
         type: 'error',

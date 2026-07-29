@@ -1,7 +1,6 @@
 import { Outlet } from 'react-router-dom';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
-import NotificationContainer from '@/components/NotificationContainer';
 
 function AppLayout() {
   return (
@@ -13,7 +12,6 @@ function AppLayout() {
           <Outlet />
         </main>
       </div>
-      <NotificationContainer />
     </div>
   );
 }

@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import type { AxiosError } from 'axios';
 import { Eye, EyeOff, FlaskConical, ArrowLeft, CheckCircle } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { authAPI } from '@/services/api';
+import { getApiErrorMessage } from '@/services/errors';
 
 function Register() {
   const navigate = useNavigate();
@@ -20,8 +20,25 @@ function Register() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username || !email || !password) {
+    const normalizedUsername = username.trim();
+    const normalizedEmail = email.trim().toLowerCase();
+    const hasLetter = /\p{L}/u.test(password);
+    const hasNumber = /\p{N}/u.test(password);
+
+    if (!normalizedUsername || !normalizedEmail || !password || !confirmPassword) {
       addNotification({ type: 'warning', message: '请填写完整信息', duration: 3000 });
+      return;
+    }
+    if (normalizedUsername.length < 2 || normalizedUsername.length > 50) {
+      addNotification({ type: 'warning', message: '用户名需要 2–50 个字符', duration: 3000 });
+      return;
+    }
+    if (password.length < 8 || password.length > 128) {
+      addNotification({ type: 'warning', message: '密码需要 8–128 个字符', duration: 3000 });
+      return;
+    }
+    if (!hasLetter || !hasNumber) {
+      addNotification({ type: 'warning', message: '密码必须同时包含字母和数字', duration: 3000 });
       return;
     }
     if (password !== confirmPassword) {
@@ -31,7 +48,7 @@ function Register() {
 
     setIsLoading(true);
     try {
-      const response = await authAPI.register(email, password, username);
+      const response = await authAPI.register(normalizedEmail, password, normalizedUsername);
       const { user, token, requires_email_confirmation } = response.data;
       if (token) {
         login(user, token);
@@ -48,9 +65,7 @@ function Register() {
         navigate('/login');
       }
     } catch (error) {
-      const message =
-        (error as AxiosError<{ detail?: string }>).response?.data?.detail ||
-        '注册失败，请重试';
+      const message = getApiErrorMessage(error, '注册失败，请重试');
       addNotification({ type: 'error', message, duration: 5000 });
     } finally {
       setIsLoading(false);
@@ -92,6 +107,10 @@ function Register() {
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="设置用户名"
                 className="sci-input w-full"
+                minLength={2}
+                maxLength={50}
+                autoComplete="username"
+                required
               />
             </div>
 
@@ -103,6 +122,8 @@ function Register() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="your@email.com"
                 className="sci-input w-full"
+                autoComplete="email"
+                required
               />
             </div>
 
@@ -115,6 +136,11 @@ function Register() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="设置密码（至少8位）"
                   className="sci-input w-full pr-10"
+                  minLength={8}
+                  maxLength={128}
+                  autoComplete="new-password"
+                  aria-describedby="password-requirements"
+                  required
                 />
                 <button
                   type="button"
@@ -134,17 +160,42 @@ function Register() {
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="再次输入密码"
                 className="sci-input w-full"
+                minLength={8}
+                maxLength={128}
+                autoComplete="new-password"
+                required
               />
             </div>
 
-            <div className="space-y-2 text-xs text-sci-muted">
+            <div id="password-requirements" className="space-y-2 text-xs text-sci-muted">
               <div className="flex items-center gap-2">
-                <CheckCircle size={14} className={password.length >= 8 ? 'text-sci-success' : ''} />
-                <span>至少 8 个字符</span>
+                <CheckCircle
+                  size={14}
+                  className={password.length >= 8 && password.length <= 128 ? 'text-sci-success' : ''}
+                />
+                <span>8–128 个字符</span>
               </div>
               <div className="flex items-center gap-2">
-                <CheckCircle size={14} />
+                <CheckCircle
+                  size={14}
+                  className={
+                    /\p{L}/u.test(password) && /\p{N}/u.test(password)
+                      ? 'text-sci-success'
+                      : ''
+                  }
+                />
                 <span>包含字母和数字</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <CheckCircle
+                  size={14}
+                  className={
+                    confirmPassword.length > 0 && password === confirmPassword
+                      ? 'text-sci-success'
+                      : ''
+                  }
+                />
+                <span>两次密码一致</span>
               </div>
             </div>
 

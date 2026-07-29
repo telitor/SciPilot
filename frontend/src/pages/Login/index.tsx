@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import type { AxiosError } from 'axios';
 import { Eye, EyeOff, FlaskConical, ArrowLeft } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { authAPI } from '@/services/api';
+import { getApiErrorMessage } from '@/services/errors';
 
 function Login() {
   const navigate = useNavigate();
@@ -31,9 +31,7 @@ function Login() {
       addNotification({ type: 'success', message: '登录成功', duration: 3000 });
       navigate('/dashboard');
     } catch (error) {
-      const message =
-        (error as AxiosError<{ detail?: string }>).response?.data?.detail ||
-        '登录失败，请检查账号密码';
+      const message = getApiErrorMessage(error, '登录失败，请检查账号密码');
       addNotification({ type: 'error', message, duration: 5000 });
     } finally {
       setIsLoading(false);
@@ -75,6 +73,8 @@ function Login() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="your@email.com"
                 className="sci-input w-full"
+                autoComplete="email"
+                required
               />
             </div>
 
@@ -87,6 +87,8 @@ function Login() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="输入密码"
                   className="sci-input w-full pr-10"
+                  autoComplete="current-password"
+                  required
                 />
                 <button
                   type="button"
@@ -103,8 +105,13 @@ function Login() {
                 <input type="checkbox" className="rounded bg-sci-bg3 border-sci-border" />
                 <span>记住我</span>
               </label>
-              <button type="button" className="text-sci-accent hover:underline">
-                忘记密码？
+              <button
+                type="button"
+                disabled
+                title="密码找回功能暂未开放"
+                className="cursor-not-allowed text-sci-muted opacity-60"
+              >
+                忘记密码（暂未开放）
               </button>
             </div>
 
