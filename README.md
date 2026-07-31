@@ -1,37 +1,70 @@
 <div align="center">
 
-<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&height=250&color=0:07111F,50:12304A,100:0F766E&text=SciPilot&fontSize=78&fontColor=F8FAFC&animation=fadeIn&fontAlignY=36&desc=Research%20Intelligence%20Workspace&descAlignY=58&descSize=19" alt="SciPilot" />
+<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&height=285&color=0:050B14,38:0B2239,72:115E59,100:0F766E&text=SciPilot&fontSize=82&fontColor=F8FAFC&animation=fadeIn&fontAlignY=34&desc=RESEARCH%20INTELLIGENCE%20SYSTEM&descAlignY=54&descSize=17&descAlign=50" alt="SciPilot" />
+
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=20&duration=2600&pause=850&color=2DD4BF&center=true&vCenter=true&repeat=true&width=1000&height=52&lines=Read+papers.+Decompose+problems.+Reproduce+research.;Ground+every+answer+in+traceable+knowledge.;Turn+research+intent+into+executable+workflows." alt="SciPilot capabilities" />
 
 <p>
-  <strong>面向软件工程科研场景的多智能体研究工作台</strong>
+  <strong>面向软件工程科研场景的新一代多智能体研究工作台</strong>
 </p>
 
 <p>
-  论文精读 · 问题拆解 · 实验规划 · 代码复现 · 结果分析
+  让论文、知识、实验与代码在同一个智能工作流中持续流动
 </p>
 
 <p>
   <a href="https://github.com/telitor/SciPilot">
-    <img src="https://img.shields.io/badge/SciPilot-Research_AI-0F766E?style=for-the-badge" alt="SciPilot" />
+    <img src="https://img.shields.io/badge/SciPilot-Research_Intelligence-0F766E?style=for-the-badge" alt="SciPilot" />
   </a>
-  <img src="https://img.shields.io/badge/React-18-149ECA?style=for-the-badge&logo=react&logoColor=white" alt="React 18" />
-  <img src="https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" />
-  <img src="https://img.shields.io/badge/Supabase-PostgreSQL-3FCF8E?style=for-the-badge&logo=supabase&logoColor=white" alt="Supabase" />
+  <img src="https://img.shields.io/badge/Stage-Full--Stack_MVP-2563EB?style=for-the-badge" alt="Full-stack MVP" />
+  <img src="https://img.shields.io/badge/Agents-5_Vertical_Cores-7C3AED?style=for-the-badge" alt="Five vertical agents" />
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" />
-  <img src="https://img.shields.io/badge/Vite-5-646CFF?style=flat-square&logo=vite&logoColor=white" alt="Vite" />
-  <img src="https://img.shields.io/badge/PostgreSQL-RLS-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL RLS" />
-  <img src="https://img.shields.io/badge/RAG-Hybrid_Retrieval-7C3AED?style=flat-square" alt="RAG" />
-  <img src="https://img.shields.io/badge/Fine--tuned_Model-Xunfei_MaaS-EA580C?style=flat-square" alt="Fine-tuned Model" />
+  <img src="https://skillicons.dev/icons?i=react,ts,vite,tailwind,py,fastapi,supabase,postgres&theme=dark" alt="SciPilot technology stack" />
 </p>
 
-<sub>Frontend never receives model credentials or Supabase secret keys.</sub>
+<br/>
+
+<table>
+<tr>
+<td align="center" width="25%"><sub>AGENT NETWORK</sub><br/><strong>5 VERTICAL AGENTS</strong></td>
+<td align="center" width="25%"><sub>KNOWLEDGE LAYER</sub><br/><strong>HYBRID RAG</strong></td>
+<td align="center" width="25%"><sub>MODEL RUNTIME</sub><br/><strong>FINE-TUNED MaaS</strong></td>
+<td align="center" width="25%"><sub>TRUST BOUNDARY</sub><br/><strong>RLS + SERVER KEYS</strong></td>
+</tr>
+</table>
+
+<sub>Evidence grounded. Citation traceable. Credentials server-side.</sub>
 
 </div>
 
 ---
+
+<div align="center">
+
+### Product Navigation
+
+<table>
+<tr>
+<td align="center"><a href="#product-vision"><strong>产品愿景</strong></a></td>
+<td align="center"><a href="#capability-system"><strong>能力系统</strong></a></td>
+<td align="center"><a href="#agent-matrix"><strong>Agent Matrix</strong></a></td>
+<td align="center"><a href="#system-architecture"><strong>系统架构</strong></a></td>
+</tr>
+<tr>
+<td align="center"><a href="#rag-pipeline"><strong>RAG Pipeline</strong></a></td>
+<td align="center"><a href="#fine-tuned-runtime"><strong>微调模型</strong></a></td>
+<td align="center"><a href="#quick-start"><strong>快速启动</strong></a></td>
+<td align="center"><a href="#roadmap"><strong>演进路线</strong></a></td>
+</tr>
+</table>
+
+</div>
+
+---
+
+<a id="product-vision"></a>
 
 ## SciPilot 是什么
 
@@ -56,30 +89,130 @@ SciPilot 不是一个通用聊天框，而是一套围绕科研理解、实验�
 > [!NOTE]
 > 当前仓库定位为可运行的全栈 MVP。模型、Supabase 和可选 Embedding 服务需要由部署者在后端环境变量中配置。
 
+### Product Principles
+
+<table>
+<tr>
+<td width="33%" valign="top">
+<h3>01 · Evidence First</h3>
+<strong>回答必须有据可查</strong>
+<br/><br/>
+先检索用户可见知识，再组织模型回答；所有来源使用 <code>[n]</code> 标记并接受合法性校验。
+</td>
+<td width="33%" valign="top">
+<h3>02 · Workflow Native</h3>
+<strong>能力围绕科研任务组织</strong>
+<br/><br/>
+从论文精读到实验规划，从问题拆解到代码复现，不让用户在多个孤立工具间反复搬运上下文。
+</td>
+<td width="33%" valign="top">
+<h3>03 · Security by Design</h3>
+<strong>密钥与数据边界后置</strong>
+<br/><br/>
+浏览器只连接 FastAPI；模型凭据留在服务端；公共知识与个人知识通过 RLS 隔离。
+</td>
+</tr>
+</table>
+
+### Research Journey
+
+```mermaid
+flowchart LR
+    A["INGEST<br/>论文与知识"] --> B["UNDERSTAND<br/>精读与拆解"]
+    B --> C["GROUND<br/>检索与引用"]
+    C --> D["EXECUTE<br/>规划与复现"]
+    D --> E["INTERPRET<br/>结果分析"]
+    E --> F["ACCUMULATE<br/>资产沉淀"]
+    F -. "持续增强知识库" .-> A
+```
+
+<a id="capability-system"></a>
+
 ## 核心能力
 
-| 模块 | 当前实现 |
-|---|---|
-| 用户与权限 | Supabase Auth、Bearer Token、个人资料、RLS 数据隔离 |
-| 论文工作台 | PDF 上传、文本提取、论文元数据、精读结果、论文库 |
-| 五类 Agent | 论文精读、问题拆解、实验规划、代码复现、结果分析 |
-| 会话闭环 | Agent 发现、创建会话、发送消息、历史消息、持久化 |
-| 知识库 | 集合管理、PDF/TXT/Markdown/文本入库、SHA-256 去重、切块 |
-| RAG | 全文检索、中文模糊检索、可选 pgvector 混合检索 |
-| 可信回答 | `[n]` 引用约束、来源片段展示、检索与引用审计 |
-| 微调模型 | 讯飞 MaaS HTTP/OpenAI 兼容接口、`lora_id` 请求头 |
-| 科研资产 | 研究拆解、实验路线图、代码分析、结果分析结果落库 |
-| 知识图谱 | 公共与个人知识节点、关系浏览和搜索 |
+<table>
+<tr>
+<td width="50%" valign="top">
+<h3>Research Workspace</h3>
+<code>PAPERS</code> <code>AGENTS</code> <code>CONVERSATIONS</code>
+<br/><br/>
+PDF 上传与文本提取、论文元数据、结构化精读、论文库、五类科研 Agent、历史会话与持续追问。
+</td>
+<td width="50%" valign="top">
+<h3>Knowledge Intelligence</h3>
+<code>INGEST</code> <code>SEARCH</code> <code>GROUND</code>
+<br/><br/>
+知识集合、PDF/TXT/Markdown/文本入库、SHA-256 去重、分段切块、全文检索、中文模糊检索与可选向量检索。
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<h3>Trust & Traceability</h3>
+<code>CITATIONS</code> <code>AUDIT</code> <code>RLS</code>
+<br/><br/>
+来源片段、<code>[n]</code> 引用校验、检索快照、引用审计、公共与私有数据隔离、私有文件存储。
+</td>
+<td width="50%" valign="top">
+<h3>Research Assets</h3>
+<code>ROADMAP</code> <code>CODE</code> <code>RESULTS</code>
+<br/><br/>
+问题拆解、实验路线图、代码仓库分析、运行错误诊断、实验结果解读、知识节点与关系浏览。
+</td>
+</tr>
+</table>
+
+<a id="agent-matrix"></a>
 
 ## Agent Matrix
 
-| Agent | Category | 主要职责 |
-|---|---|---|
-| 论文精读助手 | `paper-reading` | 提取论文脉络、方法、实验与结论，并支持上下文追问 |
-| 问题拆解助手 | `problem-decomposition` | 将复杂研究问题拆成目标、约束、难点、子任务和验收标准 |
-| 实验规划助手 | `project-planning` | 生成阶段任务、技术路线、里程碑、风险和执行计划 |
-| 代码复现助手 | `code-reproduction` | 分析仓库结构、环境依赖、运行路径与报错定位 |
-| 结果分析助手 | `result-interpretation` | 解读指标、对比结果、异常现象、结论边界与改进方向 |
+<table>
+<tr>
+<td width="33%" valign="top">
+<sub>AGENT 01</sub>
+<h3>论文精读</h3>
+<code>paper-reading</code>
+<br/><br/>
+提取论文脉络、核心方法、实验设计与关键结论，并围绕当前论文持续追问。
+</td>
+<td width="33%" valign="top">
+<sub>AGENT 02</sub>
+<h3>问题拆解</h3>
+<code>problem-decomposition</code>
+<br/><br/>
+把复杂研究问题拆成目标、约束、输入输出、核心难点、子任务与验收标准。
+</td>
+<td width="33%" valign="top">
+<sub>AGENT 03</sub>
+<h3>实验规划</h3>
+<code>project-planning</code>
+<br/><br/>
+生成阶段任务、技术路线、里程碑、依赖关系、风险控制与执行计划。
+</td>
+</tr>
+<tr>
+<td width="33%" valign="top">
+<sub>AGENT 04</sub>
+<h3>代码复现</h3>
+<code>code-reproduction</code>
+<br/><br/>
+分析仓库结构、环境依赖、入口脚本与运行路径，协助定位复现过程中的错误。
+</td>
+<td width="33%" valign="top">
+<sub>AGENT 05</sub>
+<h3>结果分析</h3>
+<code>result-interpretation</code>
+<br/><br/>
+解读指标变化、模型差异和异常现象，识别结论边界并提出下一轮验证建议。
+</td>
+<td width="33%" valign="top">
+<sub>SHARED INTELLIGENCE</sub>
+<h3>统一知识底座</h3>
+<code>RAG + CITATIONS</code>
+<br/><br/>
+五个工作舱共享同一套知识检索、引用校验、会话持久化和安全权限体系。
+</td>
+</tr>
+</table>
 
 所有 Agent 复用统一后端闭环：
 
@@ -94,7 +227,26 @@ GET /agents
 
 前端只认识 `agent_id` 和 `category`，不会接触模型的 API Key、API Secret、WebSocket 地址或 LoRA 资源 ID。
 
+### Product Surfaces
+
+| Workspace | Route | 交付结果 |
+|---|---|---|
+| Research Cockpit | `/dashboard` | 研究资产、活动与工作状态总览 |
+| Paper Intelligence | `/paper/read` · `/paper/library` | 论文上传、精读、追问与论文资产管理 |
+| Problem Studio | `/research/decompose` | 研究问题结构化拆解 |
+| Experiment Studio | `/experiment/roadmap` | 可执行实验路线图 |
+| Reproduction Studio | `/code/reproduce` | 仓库分析、环境规划与错误诊断 |
+| Result Studio | `/result/analyze` | 实验数据解读与结论建议 |
+| Knowledge Center | `/knowledge` | 私有集合、文档入库、检索与基于来源问答 |
+| Knowledge Graph | `/kg/explore` | 知识节点、关系网络与主题探索 |
+
+---
+
+<a id="system-architecture"></a>
+
 ## System Architecture
+
+<p align="right"><code>SCIPILOT / SYSTEM BLUEPRINT / 01</code></p>
 
 ```mermaid
 flowchart LR
@@ -147,7 +299,13 @@ flowchart LR
 - 公共知识可被登录用户检索，个人知识只对所有者可见。
 - 知识表和 Storage 均使用 RLS；后端检索 RPC 只授权给服务端角色。
 
+---
+
+<a id="rag-pipeline"></a>
+
 ## RAG 工作流
+
+<p align="right"><code>SCIPILOT / KNOWLEDGE ENGINE / 02</code></p>
 
 ```mermaid
 sequenceDiagram
@@ -177,7 +335,13 @@ sequenceDiagram
 4. 模型必须使用合法的 `[1]`、`[2]` 引用；无效引用会触发可审计的证据摘录 fallback。
 5. 没有命中证据时，系统明确说明知识库信息不足，而不是编造来源。
 
+---
+
+<a id="fine-tuned-runtime"></a>
+
 ## 微调模型链路
+
+<p align="right"><code>SCIPILOT / MODEL RUNTIME / 03</code></p>
 
 SciPilot 已接入讯飞 MaaS 的 OpenAI 兼容 HTTP 接口。模型配置完整时，RAG 和现有回复链路会优先使用 SciPilot 微调模型。
 
@@ -202,7 +366,22 @@ grounded answer + citation validation
 > [!IMPORTANT]
 > `SCIPILOT_LLM_RESOURCE_ID` 是 LoRA 的 Resource ID，后端会把它作为 `lora_id` 请求头发送。不要把它写到前端，也不要提交真实值。
 
+### Runtime Profiles
+
+| Profile | Model | Retrieval | 系统行为 |
+|---|---|---|---|
+| Evidence Core | 未配置 | 全文 + 中文模糊 | 返回带引用的证据摘录，知识库仍可完整使用 |
+| Fine-tuned | SciPilot MaaS | 全文 + 中文模糊 | 微调模型基于命中证据生成回答 |
+| Hybrid Intelligence | SciPilot MaaS | 全文 + 模糊 + pgvector | 同时启用语义召回、微调生成和引用审计 |
+| Compatibility | Xunfei / Generic LLM | 可用检索 | 微调模型不可用时按服务端配置安全降级 |
+
+---
+
+<a id="quick-start"></a>
+
 ## Quick Start
+
+<p align="right"><code>SCIPILOT / LAUNCH SEQUENCE / 04</code></p>
 
 ### 1. 获取代码
 
@@ -328,7 +507,11 @@ LLM_MODEL=
 > [!CAUTION]
 > 不要提交 `backend/.env`。不要把 Supabase Secret/Service Role Key、模型 API Key、API Secret 或 Resource ID 放进任何 `VITE_*` 变量。
 
+---
+
 ## API Overview
+
+<p align="right"><code>SCIPILOT / API CONTROL PLANE / 05</code></p>
 
 所有业务接口使用 `/api/v1` 前缀。
 
@@ -355,7 +538,11 @@ Swagger 会展示最新请求模型和响应结构：
 http://localhost:8000/docs
 ```
 
+---
+
 ## Project Structure
+
+<p align="right"><code>SCIPILOT / REPOSITORY MAP / 06</code></p>
 
 ```text
 SciPilot/
@@ -427,6 +614,8 @@ python scripts/e2e_agent_knowledge.py
 6. 确认公共知识仍可被两个账号读取。
 7. 在 Supabase 中确认 `kb_retrievals`、`kb_citations` 和会话消息已落库。
 
+---
+
 ## 当前边界
 
 - 扫描版 PDF 暂不执行 OCR，需先转换成可复制文本的 PDF。
@@ -435,7 +624,13 @@ python scripts/e2e_agent_knowledge.py
 - 多 Agent 当前是统一入口下的垂直能力调用，不是自动自治编排系统。
 - 仓库未内置生产域名、CI/CD、监控告警与云端部署配置。
 
+---
+
+<a id="roadmap"></a>
+
 ## Roadmap
+
+<p align="right"><code>SCIPILOT / EVOLUTION MAP / 07</code></p>
 
 ```mermaid
 timeline
