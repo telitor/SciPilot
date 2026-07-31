@@ -1,1011 +1,483 @@
-<!-- SCIPILOT README · REFINED PREMIUM EDITION -->
-
 <div align="center">
 
-<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&height=255&color=0:080C16,48:111827,100:1E3A5F&text=SciPilot&fontSize=80&fontColor=F8FAFC&animation=fadeIn&fontAlignY=36&desc=Multi-Agent%20Research%20Engineering%20Platform&descAlignY=57&descSize=18" />
-
-<img src="https://readme-typing-svg.demolab.com?font=DM+Sans&weight=500&size=21&duration=3400&pause=1000&color=94A3B8&center=true&vCenter=true&repeat=true&width=920&height=42&lines=Five+Research+Agents+%C2%B7+One+Unified+Intelligence+Core;Paper+Reading+%C2%B7+Problem+Decomposition+%C2%B7+Result+Interpretation;Code+Reproduction+%C2%B7+Project+Planning" />
-
-<br/>
-
-<h3>面向软件工程科研场景的多智能体协同平台</h3>
-
-<p><strong>Multi-Agent Research Copilot for Software Engineering</strong></p>
-
-<sub>从论文理解、问题拆解到代码复现与项目规划，将分散的科研任务连接为完整的智能工作流。</sub>
-
-<br/><br/>
-
-<img src="https://skillicons.dev/icons?i=react,ts,vite,tailwind,py,fastapi,supabase,postgres,git,github,vscode&theme=dark" />
-
-<br/><br/>
+<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&height=250&color=0:07111F,50:12304A,100:0F766E&text=SciPilot&fontSize=78&fontColor=F8FAFC&animation=fadeIn&fontAlignY=36&desc=Research%20Intelligence%20Workspace&descAlignY=58&descSize=19" alt="SciPilot" />
 
 <p>
-<code>React + TypeScript</code>&nbsp;&nbsp;·&nbsp;&nbsp;
-<code>FastAPI</code>&nbsp;&nbsp;·&nbsp;&nbsp;
-<code>Supabase</code>&nbsp;&nbsp;·&nbsp;&nbsp;
-<code>WebSocket Agents</code>&nbsp;&nbsp;·&nbsp;&nbsp;
-<code>RLS + Bearer Auth</code>
+  <strong>面向软件工程科研场景的多智能体研究工作台</strong>
 </p>
 
-<br/>
+<p>
+  论文精读 · 问题拆解 · 实验规划 · 代码复现 · 结果分析
+</p>
 
-<table>
-<tr>
-<td align="center" width="25%"><sub>AGENT CORE</sub><br/><strong>5 / 5 ONLINE</strong></td>
-<td align="center" width="25%"><sub>PIPELINE</sub><br/><strong>OPERATIONAL</strong></td>
-<td align="center" width="25%"><sub>DATA LAYER</sub><br/><strong>CONNECTED</strong></td>
-<td align="center" width="25%"><sub>SECURITY</sub><br/><strong>ENABLED</strong></td>
-</tr>
-</table>
+<p>
+  <a href="https://github.com/telitor/SciPilot">
+    <img src="https://img.shields.io/badge/SciPilot-Research_AI-0F766E?style=for-the-badge" alt="SciPilot" />
+  </a>
+  <img src="https://img.shields.io/badge/React-18-149ECA?style=for-the-badge&logo=react&logoColor=white" alt="React 18" />
+  <img src="https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/Supabase-PostgreSQL-3FCF8E?style=for-the-badge&logo=supabase&logoColor=white" alt="Supabase" />
+</p>
 
-</div>
+<p>
+  <img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/Vite-5-646CFF?style=flat-square&logo=vite&logoColor=white" alt="Vite" />
+  <img src="https://img.shields.io/badge/PostgreSQL-RLS-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL RLS" />
+  <img src="https://img.shields.io/badge/RAG-Hybrid_Retrieval-7C3AED?style=flat-square" alt="RAG" />
+  <img src="https://img.shields.io/badge/Fine--tuned_Model-Xunfei_MaaS-EA580C?style=flat-square" alt="Fine-tuned Model" />
+</p>
 
-<br/>
-
-<details>
-<summary><strong>System Profile / 系统概览</strong></summary>
-
-<br/>
-
-<table>
-<tr><td width="24%"><strong>Mode</strong></td><td>Research Engineering</td></tr>
-<tr><td><strong>Agent Core</strong></td><td>Five Vertical Agents</td></tr>
-<tr><td><strong>Gateway</strong></td><td>FastAPI Unified Dispatcher</td></tr>
-<tr><td><strong>Data</strong></td><td>Supabase PostgreSQL + RLS</td></tr>
-<tr><td><strong>Runtime</strong></td><td>Authenticated WebSocket Agents</td></tr>
-<tr><td><strong>Status</strong></td><td>Full-Stack MVP Closed Loop Operational</td></tr>
-</table>
-
-</details>
-
-<br/>
-
-<div align="center">
-
-### Navigation Console · 快速导航
-
-<table>
-<tr>
-<td width="33%"><a href="#mission-control"><strong>01 · Mission Control</strong></a></td>
-<td width="33%"><a href="#agent-constellation"><strong>02 · Agent Matrix</strong></a></td>
-<td width="33%"><a href="#intelligence-pipeline"><strong>03 · Pipeline</strong></a></td>
-</tr>
-<tr>
-<td><a href="#system-architecture"><strong>04 · Architecture</strong></a></td>
-<td><a href="#dynamic-agent-routing"><strong>05 · Routing</strong></a></td>
-<td><a href="#capability-matrix"><strong>06 · Capabilities</strong></a></td>
-</tr>
-<tr>
-<td><a href="#api-gateway"><strong>07 · API Gateway</strong></a></td>
-<td><a href="#data-galaxy"><strong>08 · Data Galaxy</strong></a></td>
-<td><a href="#technology-core"><strong>09 · Tech Core</strong></a></td>
-</tr>
-<tr>
-<td><a href="#project-structure"><strong>10 · Structure</strong></a></td>
-<td><a href="#security-protocol"><strong>11 · Security</strong></a></td>
-<td><a href="#system-verification"><strong>12 · Verification</strong></a></td>
-</tr>
-<tr>
-<td><a href="#evolution-roadmap"><strong>13 · Roadmap</strong></a></td>
-<td><a href="#vision"><strong>14 · Vision</strong></a></td>
-<td><a href="#contributors"><strong>15 · Contributors</strong></a></td>
-</tr>
-</table>
+<sub>Frontend never receives model credentials or Supabase secret keys.</sub>
 
 </div>
 
-<br/>
-
 ---
 
-<a id="mission-control"></a>
+## SciPilot 是什么
 
-## 01 · Mission Control / 平台使命
+SciPilot 不是一个通用聊天框，而是一套围绕科研理解、实验设计和工程复现构建的智能工作流。
 
-<p align="right"><code>SCIPILOT::CORE_01</code></p>
-
-**SciPilot** 是一个面向软件工程学习、科研分析与项目实践的多智能体平台。
-
-平台以真实科研工作流为核心，将多个已经完成搭建的垂直 Agent 接入统一的前后端系统，通过 **React、FastAPI、Supabase 与独立 WebSocket Agent Runtime**，形成从用户输入到智能处理、结果展示和数据持久化的完整闭环。
+系统将五类垂直 Agent、个人与公共知识库、论文管理、会话持久化和微调模型统一在一个全栈应用中。用户只与 React 前端交互；FastAPI 负责身份校验、知识检索、模型路由和结果落库；Supabase 提供 Auth、PostgreSQL、Storage、RLS 与向量检索能力。
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│                       SciPilot Core                         │
-├─────────────────────────────────────────────────────────────┤
-│  Research Input                                             │
-│       ↓                                                     │
-│  Intelligent Agent Routing                                  │
-│       ↓                                                     │
-│  Structured Analysis                                        │
-│       ↓                                                     │
-│  Executable Research & Engineering Workflow                 │
-└─────────────────────────────────────────────────────────────┘
+研究资料进入系统
+      ↓
+解析、去重、切块与索引
+      ↓
+用户选择科研 Agent 并提出问题
+      ↓
+检索公共知识 + 用户私有知识
+      ↓
+微调模型生成有依据的回答
+      ↓
+引用校验、会话保存与检索审计
 ```
 
-> [!IMPORTANT]
-> **SciPilot is not a general chatbot.**  
-> 它不是单一的问答工具，而是一套面向科研与软件工程任务的智能协作系统。
+> [!NOTE]
+> 当前仓库定位为可运行的全栈 MVP。模型、Supabase 和可选 Embedding 服务需要由部署者在后端环境变量中配置。
 
----
+## 核心能力
 
-<a id="agent-constellation"></a>
+| 模块 | 当前实现 |
+|---|---|
+| 用户与权限 | Supabase Auth、Bearer Token、个人资料、RLS 数据隔离 |
+| 论文工作台 | PDF 上传、文本提取、论文元数据、精读结果、论文库 |
+| 五类 Agent | 论文精读、问题拆解、实验规划、代码复现、结果分析 |
+| 会话闭环 | Agent 发现、创建会话、发送消息、历史消息、持久化 |
+| 知识库 | 集合管理、PDF/TXT/Markdown/文本入库、SHA-256 去重、切块 |
+| RAG | 全文检索、中文模糊检索、可选 pgvector 混合检索 |
+| 可信回答 | `[n]` 引用约束、来源片段展示、检索与引用审计 |
+| 微调模型 | 讯飞 MaaS HTTP/OpenAI 兼容接口、`lora_id` 请求头 |
+| 科研资产 | 研究拆解、实验路线图、代码分析、结果分析结果落库 |
+| 知识图谱 | 公共与个人知识节点、关系浏览和搜索 |
 
-## 02 · Agent Constellation / 智能体矩阵
+## Agent Matrix
 
-<p align="right"><code>SCIPILOT::AGENT_MATRIX_02</code></p>
+| Agent | Category | 主要职责 |
+|---|---|---|
+| 论文精读助手 | `paper-reading` | 提取论文脉络、方法、实验与结论，并支持上下文追问 |
+| 问题拆解助手 | `problem-decomposition` | 将复杂研究问题拆成目标、约束、难点、子任务和验收标准 |
+| 实验规划助手 | `project-planning` | 生成阶段任务、技术路线、里程碑、风险和执行计划 |
+| 代码复现助手 | `code-reproduction` | 分析仓库结构、环境依赖、运行路径与报错定位 |
+| 结果分析助手 | `result-interpretation` | 解读指标、对比结果、异常现象、结论边界与改进方向 |
 
-<div align="center">
-
-<sub><strong>Paper Reading</strong>&nbsp;&nbsp;·&nbsp;&nbsp;<strong>Problem Decomposition</strong>&nbsp;&nbsp;·&nbsp;&nbsp;<strong>Result Interpretation</strong>&nbsp;&nbsp;·&nbsp;&nbsp;<strong>Code Reproduction</strong>&nbsp;&nbsp;·&nbsp;&nbsp;<strong>Project Planning</strong></sub>
-
-</div>
-
-<br/>
-
-<table>
-<tr>
-<td width="50%" valign="top">
-
-### 📄 Paper Reading Agent
-
-**论文精读助手**
-
-将 PDF 论文转换为结构化科研认知。
-
-- PDF 文件上传与文本提取
-- 研究背景与研究动机识别
-- 核心方法与技术路线梳理
-- 实验结果与关键结论分析
-- 基于当前论文内容持续追问
-- 支持重新上传与切换论文
+所有 Agent 复用统一后端闭环：
 
 ```text
-Category: paper-reading
+GET /agents
+  → POST /conversations
+  → POST /conversations/{id}/messages
+  → RAG retrieval
+  → model response
+  → Supabase persistence
 ```
 
-</td>
+前端只认识 `agent_id` 和 `category`，不会接触模型的 API Key、API Secret、WebSocket 地址或 LoRA 资源 ID。
 
-<td width="50%" valign="top">
-
-### 🧩 Problem Decomposition Agent
-
-**问题拆解助手**
-
-将复杂研究问题转换为可执行任务树。
-
-- 识别研究背景与核心目标
-- 分析约束、输入与预期输出
-- 提炼关键难点与子问题
-- 构建阶段化解决路径
-- 生成任务、方法和验收标准
-
-```text
-Category: problem-decomposition
-```
-
-</td>
-</tr>
-
-<tr>
-<td width="50%" valign="top">
-
-### 📊 Result Interpretation Agent
-
-**结果分析助手**
-
-将实验数据转换为有依据的分析结论。
-
-- 支持 CSV、JSON、Excel 等结果输入
-- 分析评价指标与变化趋势
-- 解释模型差异与异常现象
-- 判断实验结论与可信边界
-- 输出优化方向与验证建议
-
-```text
-Category: result-interpretation
-```
-
-</td>
-
-<td width="50%" valign="top">
-
-### 🧬 Code Reproduction Agent
-
-**代码复现助手**
-
-将论文代码与开源仓库转换为复现路线。
-
-- GitHub 仓库与目录结构分析
-- Python 环境与依赖配置
-- 配置文件、入口脚本与模块识别
-- 错误日志和运行异常诊断
-- 输出逐步执行的复现计划
-
-```text
-Category: code-reproduction
-```
-
-</td>
-</tr>
-
-<tr>
-<td colspan="2" valign="top">
-
-### 🚀 Project Planning Agent
-
-**项目规划助手**
-
-将科研设想或软件工程目标转化为可落地的项目蓝图。
-
-- 分析项目目标与核心范围
-- 拆分需求、开发、测试和部署阶段
-- 生成技术路线与阶段任务
-- 规划里程碑、人员分工和时间安排
-- 识别风险、依赖关系与应对策略
-- 建立可量化的验收标准
-
-```text
-Category: project-planning
-```
-
-</td>
-</tr>
-</table>
-
----
-
-<a id="intelligence-pipeline"></a>
-
-## 03 · Intelligence Pipeline / 智能工作流
-
-<p align="right"><code>SCIPILOT::PIPELINE_03</code></p>
+## System Architecture
 
 ```mermaid
 flowchart LR
-    USER["User Input<br/>用户输入"] --> UI["SciPilot Interface<br/>统一交互界面"]
+    subgraph Browser["Browser"]
+        UI["React + TypeScript"]
+        Store["Zustand"]
+        HTTP["Axios"]
+    end
 
-    UI --> DISCOVERY["Agent Discovery<br/>GET /agents"]
-    DISCOVERY --> CATEGORY{"Category Router<br/>智能体分类路由"}
+    subgraph Backend["FastAPI /api/v1"]
+        Auth["JWT & Ownership"]
+        API["Research APIs"]
+        Retrieval["RAG Orchestrator"]
+        Router["Model Router"]
+    end
 
-    CATEGORY --> PAPER["Paper Reading"]
-    CATEGORY --> DECOMPOSE["Problem Decomposition"]
-    CATEGORY --> RESULT["Result Interpretation"]
-    CATEGORY --> CODE["Code Reproduction"]
-    CATEGORY --> PROJECT["Project Planning"]
+    subgraph Intelligence["Intelligence"]
+        FineTuned["SciPilot Fine-tuned Model"]
+        Xunfei["Xunfei Agent Fallback"]
+        Generic["Generic LLM Fallback"]
+        Extractive["Evidence-only Fallback"]
+    end
 
-    PAPER --> RUNTIME["Independent Agent Runtime"]
-    DECOMPOSE --> RUNTIME
-    RESULT --> RUNTIME
-    CODE --> RUNTIME
-    PROJECT --> RUNTIME
+    subgraph Supabase["Supabase"]
+        SupaAuth["Auth"]
+        DB["PostgreSQL + RLS"]
+        Vector["FTS + pg_trgm + pgvector"]
+        Storage["Private Storage"]
+    end
 
-    RUNTIME --> REPLY["Structured Reply<br/>结构化回复"]
-    REPLY --> STORE["Supabase Persistence<br/>会话与消息保存"]
-    STORE --> UI
+    UI --> Store --> HTTP
+    HTTP --> Auth --> API
+    API --> Retrieval
+    Retrieval --> Vector
+    Retrieval --> Router
+    Router --> FineTuned
+    Router --> Xunfei
+    Router --> Generic
+    Router --> Extractive
+    Auth --> SupaAuth
+    API --> DB
+    API --> Storage
 ```
 
-统一闭环：
+### 数据边界
 
-```text
-用户登录
-   ↓
-进入功能页面
-   ↓
-根据 Category 获取 Agent
-   ↓
-创建 Conversation
-   ↓
-调用 POST /chat
-   ↓
-FastAPI 选择对应 Agent 配置
-   ↓
-建立带签名的 WebSocket 连接
-   ↓
-获取智能体回复
-   ↓
-前端展示结果
-   ↓
-Supabase 保存 User / Assistant 消息
-```
+- 浏览器仅调用 FastAPI，不直接连接模型服务。
+- Supabase Secret Key、模型 Key 和 LoRA 资源 ID 只存在于 `backend/.env`。
+- 私有知识文件存储在非公开 Storage Bucket 中。
+- 公共知识可被登录用户检索，个人知识只对所有者可见。
+- 知识表和 Storage 均使用 RLS；后端检索 RPC 只授权给服务端角色。
 
----
-
-<a id="system-architecture"></a>
-
-## 04 · System Architecture / 系统架构
-
-<p align="right"><code>SCIPILOT::ARCHITECTURE_04</code></p>
+## RAG 工作流
 
 ```mermaid
-flowchart TB
-    subgraph CLIENT["Client Layer · 前端交互层"]
-        REACT["React"]
-        TYPESCRIPT["TypeScript"]
-        VITE["Vite"]
-        TAILWIND["Tailwind CSS"]
-        ZUSTAND["Zustand"]
-        AXIOS["Axios"]
-    end
+sequenceDiagram
+    participant U as User
+    participant F as Frontend
+    participant A as FastAPI
+    participant S as Supabase
+    participant M as Model
 
-    subgraph API["Application Layer · 后端服务层"]
-        FASTAPI["FastAPI Gateway"]
-        AUTH["Authentication"]
-        PAPER_API["Paper Analyze"]
-        CONVERSATION["Conversation Service"]
-        CHAT["Unified Chat API"]
-        DISPATCHER["Agent Dispatcher"]
-    end
-
-    subgraph AGENTS["Agent Runtime Layer · 智能体运行层"]
-        A1["Paper Reading"]
-        A2["Problem Decomposition"]
-        A3["Result Interpretation"]
-        A4["Code Reproduction"]
-        A5["Project Planning"]
-    end
-
-    subgraph DATA["Data Layer · 数据与权限层"]
-        SUPA_AUTH["Supabase Auth"]
-        POSTGRES["PostgreSQL"]
-        RLS["Row Level Security"]
-        TABLES["Profiles / Agents<br/>Conversations / Messages"]
-    end
-
-    REACT --> TYPESCRIPT
-    TYPESCRIPT --> VITE
-    REACT --> TAILWIND
-    REACT --> ZUSTAND
-    ZUSTAND --> AXIOS
-
-    AXIOS --> FASTAPI
-    FASTAPI --> AUTH
-    FASTAPI --> PAPER_API
-    FASTAPI --> CONVERSATION
-    FASTAPI --> CHAT
-    CHAT --> DISPATCHER
-
-    DISPATCHER --> A1
-    DISPATCHER --> A2
-    DISPATCHER --> A3
-    DISPATCHER --> A4
-    DISPATCHER --> A5
-
-    AUTH --> SUPA_AUTH
-    FASTAPI --> POSTGRES
-    POSTGRES --> RLS
-    RLS --> TABLES
+    U->>F: 提交科研问题
+    F->>A: Bearer Token + agent_id + message
+    A->>S: 校验用户、Agent 与会话归属
+    A->>S: search_knowledge_base(...)
+    S-->>A: 可见知识片段与相关度
+    A->>M: Agent prompt + bounded evidence
+    M-->>A: 带 [n] 引用的回答
+    A->>A: 校验引用是否真实存在
+    A->>S: 保存消息、检索快照与引用
+    A-->>F: reply + citations + knowledge_used
 ```
 
----
+检索策略：
 
-<a id="dynamic-agent-routing"></a>
+1. 默认使用 PostgreSQL 全文检索与 `pg_trgm` 中文模糊检索。
+2. 配置 Embedding 服务后，自动加入 1536 维 `pgvector` 语义检索。
+3. 系统合并关键词相关度和向量相似度，返回当前用户可见的片段。
+4. 模型必须使用合法的 `[1]`、`[2]` 引用；无效引用会触发可审计的证据摘录 fallback。
+5. 没有命中证据时，系统明确说明知识库信息不足，而不是编造来源。
 
-## 05 · Dynamic Agent Routing / 动态智能体调度
+## 微调模型链路
 
-<p align="right"><code>SCIPILOT::DISPATCHER_05</code></p>
-
-后端不会将 Agent 密钥或调用地址暴露给前端。
-
-FastAPI 根据 Supabase 中的 `agent.category`，选择对应的独立 Agent 配置。
-
-```mermaid
-flowchart TD
-    REQUEST["POST /chat"] --> QUERY["Query Agent by agent_id"]
-    QUERY --> ROUTE{"Read agent.category"}
-
-    ROUTE -->|"paper-reading"| C1["Paper Reading Config"]
-    ROUTE -->|"problem-decomposition"| C2["Problem Decomposition Config"]
-    ROUTE -->|"result-interpretation"| C3["Result Interpretation Config"]
-    ROUTE -->|"code-reproduction"| C4["Code Reproduction Config"]
-    ROUTE -->|"project-planning"| C5["Project Planning Config"]
-
-    C1 --> WS["Signed WebSocket Caller"]
-    C2 --> WS
-    C3 --> WS
-    C4 --> WS
-    C5 --> WS
-
-    WS --> RESULT["Agent Reply"]
-    RESULT --> DATABASE["Save Messages"]
-    RESULT --> RESPONSE["Return to Frontend"]
-```
-
-每个新增 Agent 均可拥有独立的：
+SciPilot 已接入讯飞 MaaS 的 OpenAI 兼容 HTTP 接口。模型配置完整时，RAG 和现有回复链路会优先使用 SciPilot 微调模型。
 
 ```text
-APP ID
-API Key
-API Secret
-WebSocket URL
+SCIPILOT_LLM_* configured
+        ↓
+POST /v2/chat/completions
+        ↓
+model = SCIPILOT_LLM_MODEL_ID
+lora_id header = SCIPILOT_LLM_RESOURCE_ID
+        ↓
+grounded answer + citation validation
 ```
 
-前端只接触：
+模型选择顺序：
 
-```text
-agent_id
-category
-conversation_id
-message
-reply
-```
+1. SciPilot 微调模型；
+2. 论文精读 Agent 的讯飞 WebSocket 调用；
+3. 可选通用 LLM；
+4. 仅基于证据片段的安全摘录。
 
----
+> [!IMPORTANT]
+> `SCIPILOT_LLM_RESOURCE_ID` 是 LoRA 的 Resource ID，后端会把它作为 `lora_id` 请求头发送。不要把它写到前端，也不要提交真实值。
 
-<a id="capability-matrix"></a>
+## Quick Start
 
-## 06 · Capability Matrix / 能力矩阵
-
-<p align="right"><code>SCIPILOT::CAPABILITIES_06</code></p>
-
-| Capability | Description | Status |
-|---|---|:---:|
-| Authentication | 用户注册、登录与 Bearer Token 鉴权 | ✅ |
-| Agent Discovery | 从 Supabase 动态读取公开 Agent | ✅ |
-| Agent Routing | 根据 category 调度独立 Agent | ✅ |
-| Conversation Creation | 创建用户与 Agent 会话 | ✅ |
-| Message Persistence | 保存 user / assistant 消息 | ✅ |
-| PDF Upload | PDF 文件上传与格式校验 | ✅ |
-| Paper Extraction | 论文文本提取与长度控制 | ✅ |
-| Structured Paper Analysis | 生成结构化论文精读报告 | ✅ |
-| Contextual Paper Q&A | 基于当前论文继续追问 | ✅ |
-| Problem Decomposition | 研究问题结构化拆解 | ✅ |
-| Result Interpretation | 实验结果与指标分析 | ✅ |
-| Code Reproduction | 仓库复现与错误诊断 | ✅ |
-| Project Planning | 项目阶段、里程碑和风险规划 | ✅ |
-| Independent Credentials | 独立 Agent 配置隔离 | ✅ |
-| RLS Authorization | 用户级数据访问隔离 | ✅ |
-| Error Normalization | 统一超时与错误提示 | ✅ |
-
----
-
-<a id="api-gateway"></a>
-
-## 07 · API Gateway / 接口总览
-
-<p align="right"><code>SCIPILOT::API_GATEWAY_07</code></p>
-
-| Method | Endpoint | Function |
-|---|---|---|
-| `GET` | `/` | 服务健康检查 |
-| `POST` | `/auth/login` | 用户登录 |
-| `POST` | `/auth/register` | 用户注册 |
-| `GET` | `/users/me` | 获取当前用户 |
-| `GET` | `/agents` | 获取公开智能体 |
-| `POST` | `/conversations` | 创建会话 |
-| `GET` | `/conversations` | 获取会话列表 |
-| `GET` | `/conversations/{conversation_id}/messages` | 获取历史消息 |
-| `POST` | `/chat` | 统一智能体调用 |
-| `POST` | `/papers/analyze` | PDF 解析与论文精读 |
-
-### Chat Request
-
-```json
-{
-  "conversation_id": "conversation_uuid",
-  "agent_id": "agent_uuid",
-  "message": "用户输入内容"
-}
-```
-
-### Chat Response
-
-```json
-{
-  "reply": "智能体生成的回复"
-}
-```
-
-### Paper Analyze Request
-
-```text
-Content-Type: multipart/form-data
-
-file: paper.pdf
-```
-
-### Paper Analyze Response
-
-```json
-{
-  "title": "论文标题",
-  "authors": "作者信息",
-  "sections": [
-    {
-      "title": "研究背景与动机",
-      "content": "结构化分析内容",
-      "citation": "[1]"
-    }
-  ]
-}
-```
-
----
-
-<a id="data-galaxy"></a>
-
-## 08 · Data Galaxy / 数据模型
-
-<p align="right"><code>SCIPILOT::DATA_LAYER_08</code></p>
-
-```mermaid
-erDiagram
-    PROFILES {
-        uuid id PK
-        text email
-        text username
-        text avatar_url
-        timestamptz created_at
-        timestamptz updated_at
-    }
-
-    AGENTS {
-        uuid id PK
-        text name
-        text description
-        text category
-        text system_prompt
-        boolean is_public
-        timestamptz created_at
-        timestamptz updated_at
-    }
-
-    CONVERSATIONS {
-        uuid id PK
-        uuid user_id FK
-        uuid agent_id FK
-        text title
-        timestamptz created_at
-        timestamptz updated_at
-    }
-
-    MESSAGES {
-        uuid id PK
-        uuid conversation_id FK
-        uuid user_id FK
-        text role
-        text content
-        timestamptz created_at
-    }
-
-    PROFILES ||--o{ CONVERSATIONS : owns
-    AGENTS ||--o{ CONVERSATIONS : powers
-    CONVERSATIONS ||--o{ MESSAGES : contains
-```
-
-核心数据链：
-
-```text
-Profile
-   └── Conversation
-          ├── Agent
-          └── Messages
-                 ├── user
-                 ├── assistant
-                 └── system
-```
-
----
-
-<a id="technology-core"></a>
-
-## 09 · Technology Core / 技术核心
-
-<p align="right"><code>SCIPILOT::TECH_CORE_09</code></p>
-
-| Domain | Technology |
-|---|---|
-| Frontend | React, TypeScript, Vite, Tailwind CSS |
-| State Management | Zustand |
-| Routing | React Router |
-| API Communication | Axios |
-| Backend | Python, FastAPI, Uvicorn, Pydantic |
-| Authentication | Supabase Auth |
-| Database | Supabase PostgreSQL |
-| Authorization | Row Level Security |
-| Document Processing | PDF Text Extraction |
-| Agent Connection | Signed WebSocket |
-| Agent Routing | Category-based Dispatcher |
-| Version Control | Git, GitHub |
-
----
-
-<a id="project-structure"></a>
-
-## 10 · Project Structure / 项目结构
-
-<p align="right"><code>SCIPILOT::REPOSITORY_10</code></p>
-
-```text
-SciPilot
-├── Agent
-│   ├── PaperReading.md
-│   ├── ProjectPlanning.md
-│   └── ...
-│
-├── backend
-│   ├── main.py
-│   ├── requirements.txt
-│   ├── .env.example
-│   └── services
-│       ├── supabase_service.py
-│       ├── llm_service.py
-│       └── xunfei_agent_service.py
-│
-├── frontend
-│   ├── public
-│   ├── src
-│   │   ├── components
-│   │   │   ├── AgentChatPanel.tsx
-│   │   │   ├── NotificationContainer.tsx
-│   │   │   └── Sidebar.tsx
-│   │   ├── pages
-│   │   │   ├── Login
-│   │   │   ├── PaperRead
-│   │   │   ├── ResearchDecompose
-│   │   │   ├── ResultAnalyze
-│   │   │   ├── CodeReproduce
-│   │   │   └── ExperimentRoadmap
-│   │   ├── services
-│   │   │   └── api.ts
-│   │   ├── store
-│   │   └── main.tsx
-│   ├── package.json
-│   ├── vite.config.ts
-│   └── .env.example
-│
-├── supabase
-│   └── migrations
-│       ├── 001_init_schema.sql
-│       ├── 002_updated_at_trigger.sql
-│       ├── 003_rls_policies.sql
-│       ├── 004_add_multi_agents.sql
-│       └── 005_add_project_planning_agent.sql
-│
-├── docs
-├── .gitignore
-└── README.md
-```
-
----
-
-<details>
-<summary><strong>⚡ Quick Start / 快速启动</strong></summary>
-
-<br/>
-
-### Clone Repository
+### 1. 获取代码
 
 ```powershell
 git clone https://github.com/telitor/SciPilot.git
-cd SciPilot
+Set-Location .\SciPilot
 ```
 
-### Start Backend
+### 2. 准备 Supabase
+
+创建 Supabase 项目后，在 SQL Editor 中按编号顺序执行：
+
+```text
+supabase/migrations/001_init_schema.sql
+supabase/migrations/002_updated_at_trigger.sql
+supabase/migrations/003_rls_policies.sql
+supabase/migrations/004_add_multi_agents.sql
+supabase/migrations/005_add_project_planning_agent.sql
+supabase/migrations/006_workspace_data_layer.sql
+supabase/migrations/007_seed_public_research_catalog.sql
+supabase/migrations/008_knowledge_base.sql
+```
+
+`008_knowledge_base.sql` 会创建知识集合、文档、切块、检索记录、引用记录、混合检索 RPC 和私有 `knowledge-base` Storage Bucket。
+
+> [!TIP]
+> 如果 Supabase 项目关闭了新表的 Data API 自动暴露，请同时检查迁移中的 `GRANT` 是否已经生效。RLS 决定“能看到哪些行”，Data API 权限决定“表是否可访问”。
+
+### 3. 启动后端
 
 ```powershell
 Set-Location .\backend
-
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 Copy-Item .env.example .env
+```
 
+编辑 `backend/.env`，至少填写 Supabase 配置：
+
+```env
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_PUBLISHABLE_KEY=your_publishable_key
+SUPABASE_SECRET_KEY=your_backend_secret_key
+```
+
+启动 API：
+
+```powershell
 python -m uvicorn main:app --reload
 ```
 
-Backend：
+| Service | URL |
+|---|---|
+| Backend | `http://localhost:8000` |
+| Swagger | `http://localhost:8000/docs` |
+| API Prefix | `http://localhost:8000/api/v1` |
 
-```text
-http://localhost:8000
-```
-
-Swagger：
-
-```text
-http://localhost:8000/docs
-```
-
-### Start Frontend
+### 4. 启动前端
 
 打开新的 PowerShell：
 
 ```powershell
 Set-Location .\frontend
-
 npm install
 Copy-Item .env.example .env
-
 npm run dev
 ```
 
-Frontend：
+访问 `http://localhost:5173`。
 
-```text
-http://localhost:5173
-```
-
-</details>
-
----
-
-<details>
-<summary><strong>🔐 Environment Configuration / 环境配置</strong></summary>
-
-<br/>
-
-所有真实密钥仅允许保存在：
-
-```text
-backend/.env
-```
-
-示例：
-
-```env
-# Supabase
-SUPABASE_URL=your_supabase_url
-SUPABASE_ANON_KEY=your_supabase_anon_key
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-
-# 试运行：注册后自动确认并立即登录，不发送验证邮件
-AUTH_AUTO_CONFIRM_EMAIL=true
-
-# Paper Reading Agent
-XF_AGENT_APP_ID=your_app_id
-XF_AGENT_API_KEY=your_api_key
-XF_AGENT_API_SECRET=your_api_secret
-XF_AGENT_ASSISTANT_ID=your_assistant_id
-
-# Problem Decomposition Agent
-PROBLEM_DECOMPOSITION_APP_ID=your_app_id
-PROBLEM_DECOMPOSITION_API_KEY=your_api_key
-PROBLEM_DECOMPOSITION_API_SECRET=your_api_secret
-PROBLEM_DECOMPOSITION_WS_URL=wss://your_websocket_url
-
-# Result Interpretation Agent
-RESULT_INTERPRETATION_APP_ID=your_app_id
-RESULT_INTERPRETATION_API_KEY=your_api_key
-RESULT_INTERPRETATION_API_SECRET=your_api_secret
-RESULT_INTERPRETATION_WS_URL=wss://your_websocket_url
-
-# Code Reproduction Agent
-CODE_REPRODUCTION_APP_ID=your_app_id
-CODE_REPRODUCTION_API_KEY=your_api_key
-CODE_REPRODUCTION_API_SECRET=your_api_secret
-CODE_REPRODUCTION_WS_URL=wss://your_websocket_url
-
-# Project Planning Agent
-PROJECT_PLANNING_APP_ID=your_app_id
-PROJECT_PLANNING_API_KEY=your_api_key
-PROJECT_PLANNING_API_SECRET=your_api_secret
-PROJECT_PLANNING_WS_URL=wss://your_websocket_url
-```
-
-Frontend：
+前端只需要：
 
 ```env
 VITE_API_BASE_URL=http://localhost:8000/api/v1
 ```
 
-`AUTH_AUTO_CONFIRM_EMAIL=true` 适用于当前试运行：FastAPI 在服务器端创建已确认的
-Supabase Auth 用户，再使用 Publishable/Anon 权限换取该用户自己的 JWT；Service
-Role Key 不会进入浏览器。公开生产环境如需验证邮箱所有权，请配置自有 SMTP 并将此
-开关改为 `false`。
+## Backend Configuration
+
+### 必需配置
+
+```env
+# Supabase
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_PUBLISHABLE_KEY=your_publishable_key
+SUPABASE_SECRET_KEY=your_backend_secret_key
+
+# Local origins
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+```
+
+### SciPilot 微调模型
+
+```env
+SCIPILOT_LLM_BASE_URL=https://maas-api.cn-huabei-1.xf-yun.com/v2
+SCIPILOT_LLM_API_KEY=your_web_api_key
+SCIPILOT_LLM_MODEL_ID=your_model_id
+SCIPILOT_LLM_RESOURCE_ID=your_lora_resource_id
+SCIPILOT_LLM_TEMPERATURE=0.3
+SCIPILOT_LLM_MAX_TOKENS=2048
+```
+
+### 可选语义检索
+
+```env
+EMBEDDING_API_KEY=your_embedding_api_key
+EMBEDDING_BASE_URL=
+EMBEDDING_MODEL=text-embedding-3-small
+```
+
+当前数据库向量列为 1536 维，因此 Embedding 模型也必须输出 1536 维向量。不配置时，知识库仍可使用全文与中文模糊检索。
+
+### 可选模型 fallback
+
+```env
+LLM_API_KEY=
+LLM_BASE_URL=
+LLM_MODEL=
+```
+
+完整字段和注释请查看 [backend/.env.example](backend/.env.example)。
 
 > [!CAUTION]
-> `.env` 文件、真实密钥与接口鉴权信息不得提交至 GitHub。
+> 不要提交 `backend/.env`。不要把 Supabase Secret/Service Role Key、模型 API Key、API Secret 或 Resource ID 放进任何 `VITE_*` 变量。
 
-</details>
+## API Overview
 
----
+所有业务接口使用 `/api/v1` 前缀。
 
-<a id="security-protocol"></a>
+| Domain | Endpoints |
+|---|---|
+| Health | `GET /health` |
+| Auth | `POST /auth/register`, `POST /auth/login`, `POST /auth/logout` |
+| Profile | `GET/PATCH /users/me`, `GET /users/me/stats` |
+| Papers | `POST /papers/upload`, `GET /papers`, `GET /papers/{id}` |
+| Agents | `GET /agents`, `POST /agents/{id}/ask` |
+| Conversations | `POST/GET /conversations`, `POST /conversations/{id}/messages` |
+| Legacy Chat | `POST /chat` |
+| Knowledge Base | `/knowledge/status`, `/collections`, `/documents`, `/search`, `/answer` |
+| Research | `POST /research/decompose`, `GET /research/{id}` |
+| Experiments | `POST /experiments/generate-roadmap`, `GET /experiments/{id}` |
+| Code | `POST /code/analyze-repo`, `POST /code/diagnose` |
+| Results | `POST /results/analyze`, `GET /results/{id}` |
+| Knowledge Graph | `GET /kg/explore`, `GET /kg/search` |
+| Dashboard | `GET /dashboard/summary` |
 
-## 11 · Security Protocol / 安全协议
-
-<p align="right"><code>SCIPILOT::SECURITY_11</code></p>
-
-```mermaid
-flowchart LR
-    USER["User"] --> FRONTEND["React Frontend"]
-    FRONTEND -->|"Bearer Token"| BACKEND["FastAPI Gateway"]
-
-    BACKEND -->|"Service Role"| SUPABASE["Supabase"]
-    BACKEND -->|"Signed WebSocket"| AGENTS["Agent Runtime"]
-
-    FRONTEND -. "No API Secret" .-> AGENTS
-    FRONTEND -. "No Service Role Key" .-> SUPABASE
-```
-
-安全原则：
-
-- 前端不保存任何 Agent API Secret
-- 前端不保存 Supabase Service Role Key
-- Agent 调用统一通过 FastAPI 后端代理
-- WebSocket 签名仅在服务端生成
-- Supabase RLS 隔离不同用户数据
-- `.env` 被 Git 忽略
-- 错误信息不返回敏感鉴权参数
-
----
-
-<a id="system-verification"></a>
-
-## 12 · System Verification / 系统验证
-
-<p align="right"><code>SCIPILOT::DIAGNOSTICS_12</code></p>
-
-| Component | Status |
-|---|:---:|
-| Authentication | READY |
-| Agent Discovery | READY |
-| Conversation Management | READY |
-| Message Persistence | READY |
-| Paper Reading Agent | READY |
-| Problem Decomposition Agent | READY |
-| Result Interpretation Agent | READY |
-| Code Reproduction Agent | READY |
-| Project Planning Agent | READY |
-| Independent Agent Routing | READY |
-| PDF Analysis Pipeline | READY |
-| Supabase RLS | ENABLED |
-| Software Engineering Knowledge Base | READY |
-| Five-Agent Grounded Retrieval | PASSED |
-| Two-Account Knowledge RLS E2E | PASSED |
-| Frontend Production Build | PASSED |
-
-### 12.1 · Knowledge Base / 软件工程知识库
-
-数据库与知识库在原有 `001`—`005` 迁移基础上增量完成：
-
-- `006_workspace_data_layer.sql`：论文、报告、研究产物、活动、公共目录、知识图谱与私有 Storage。
-- `007_seed_public_research_catalog.sql`：7 条公共科研资源、15 个知识节点、14 条关系。
-- `008_knowledge_base.sql`：集合、文档、切块、入库任务、检索、引用、RLS、全文/向量搜索 RPC。
-- `seed_software_engineering_kb.py`：12 条合规的原创中文软件工程知识卡，只保存题录、官方链接和原创摘要。
-- KnowledgeBase 前端：集合、PDF/TXT/Markdown/文本入库、去重、全文/混合检索、引用式问答。
-- Five-Agent RAG：五个功能页面都能调用对应 Agent，并显示知识命中、来源片段、链接和检索审计编号。
+Swagger 会展示最新请求模型和响应结构：
 
 ```text
-User Question
-  -> FastAPI JWT / Ownership Check
-  -> Public + Private Knowledge Retrieval
-  -> Five-Agent Grounded Answer
-  -> [n] Citations
-  -> kb_retrievals / kb_citations Audit
+http://localhost:8000/docs
 ```
 
-当前种子状态：`1 collection / 12 documents / 12 chunks`。未配置 Embedding 或 LLM 时，
-系统仍使用 PostgreSQL 全文与中文模糊检索，并返回可核查的证据摘录；配置 1536 维
-Embedding 后自动升级为 pgvector 混合检索。
+## Project Structure
 
-详细部署、使用与验收见：
+```text
+SciPilot/
+├─ backend/
+│  ├─ api/
+│  │  ├─ dependencies.py          # JWT 与依赖注入
+│  │  ├─ routes.py                # /api/v1 业务接口
+│  │  └─ schemas.py               # Pydantic 请求/响应模型
+│  ├─ services/
+│  │  ├─ agent_knowledge_service.py
+│  │  ├─ finetuned_model_service.py
+│  │  ├─ knowledge_base_service.py
+│  │  ├─ llm_service.py
+│  │  ├─ supabase_service.py
+│  │  └─ xunfei_agent_service.py
+│  ├─ scripts/                    # 数据播种与端到端验证
+│  ├─ tests/                      # 后端单元测试
+│  ├─ main.py
+│  └─ requirements.txt
+├─ frontend/
+│  ├─ src/
+│  │  ├─ components/
+│  │  ├─ pages/
+│  │  ├─ services/
+│  │  ├─ store/
+│  │  └─ App.tsx
+│  └─ package.json
+├─ supabase/
+│  └─ migrations/                 # 001 - 008
+├─ docs/
+│  ├─ DATABASE_GUIDE.md
+│  └─ KNOWLEDGE_BASE_GUIDE.md
+├─ 模型微调/
+└─ README.md
+```
 
-- `docs/DATABASE_GUIDE.md`
-- `docs/KNOWLEDGE_BASE_GUIDE.md`
-- `docs/SciPilot知识库与数据库实施交付说明.docx`
+## Verification
 
----
+前端：
 
-<a id="evolution-roadmap"></a>
+```powershell
+Set-Location .\frontend
+npm run type-check
+npm run build
+```
 
-## 13 · Evolution Roadmap / 演进路线
+后端单元测试：
 
-<p align="right"><code>SCIPILOT::EVOLUTION_13</code></p>
+```powershell
+Set-Location .\backend
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+连接真实 Supabase 后，可执行：
+
+```powershell
+python scripts/verify_supabase.py
+python scripts/e2e_knowledge_base.py
+python scripts/e2e_agent_knowledge.py
+```
+
+建议手工验收：
+
+1. 注册并登录两个测试账号。
+2. 创建个人知识集合，分别添加文本和可提取文本的 PDF。
+3. 搜索文档关键词，确认出现命中片段与相关度。
+4. 在五个 Agent 页面分别提问，确认回答带 `[n]` 引用和来源卡片。
+5. 检查第二个账号无法读取第一个账号的私有集合。
+6. 确认公共知识仍可被两个账号读取。
+7. 在 Supabase 中确认 `kb_retrievals`、`kb_citations` 和会话消息已落库。
+
+## 当前边界
+
+- 扫描版 PDF 暂不执行 OCR，需先转换成可复制文本的 PDF。
+- Embedding 是可选能力；未配置时不是语义向量检索。
+- 微调模型接入已完成，但运行效果取决于部署者提供的 MaaS API Key、Model ID 和 Resource ID。
+- 多 Agent 当前是统一入口下的垂直能力调用，不是自动自治编排系统。
+- 仓库未内置生产域名、CI/CD、监控告警与云端部署配置。
+
+## Roadmap
 
 ```mermaid
 timeline
-    title SciPilot Intelligence Evolution
-
-    Phase 01 - Closed Loop
-      : Authentication
-      : Five Agents Integration
-      : Unified Chat Gateway
-      : Conversation Persistence
-
-    Phase 02 - Research Workspace
-      : Paper Library
-      : Conversation History
-      : File Storage
-      : Streaming Responses
-      : Unified Agent Workspace
-
-    Phase 03 - Agent Collaboration
-      : Multi-Agent Task Transfer
-      : Shared Research Context
-      : Automatic Task Orchestration
-      : Research Memory
-      : Knowledge Graph
-
-    Phase 04 - Autonomous Workflow
-      : Literature Review Pipeline
-      : Experiment Reproduction Pipeline
-      : Intelligent Project Management
-      : Cloud Deployment
-      : Research Agent Ecosystem
+    title SciPilot Evolution
+    Full-stack MVP
+      : Authentication and profiles
+      : Five research agents
+      : Paper and conversation persistence
+    Knowledge Grounding
+      : Public and private knowledge bases
+      : Hybrid retrieval
+      : Citation audit
+    Model Intelligence
+      : Fine-tuned MaaS model
+      : Evaluation dataset
+      : Retrieval and answer quality metrics
+    Research Automation
+      : Cross-agent context
+      : Task orchestration
+      : Reproducible experiment execution
+      : Production observability
 ```
 
----
+## Documentation
 
-<a id="vision"></a>
-
-## 14 · Vision / 项目愿景
-
-<p align="right"><code>SCIPILOT::VISION_14</code></p>
-
-SciPilot 希望将科研过程中的多个独立环节连接起来：
-
-```mermaid
-flowchart LR
-    P["Paper Reading<br/>论文理解"]
-    D["Problem Decomposition<br/>问题拆解"]
-    R["Result Interpretation<br/>结果分析"]
-    C["Code Reproduction<br/>代码复现"]
-    M["Project Planning<br/>项目规划"]
-    W["Intelligent Workflow<br/>智能科研工作流"]
-
-    P --> D
-    D --> R
-    R --> C
-    C --> M
-    M --> W
-```
-
-平台的目标不只是让 AI 输出回答，而是让智能体参与科研任务的：
-
-```text
-理解
-拆解
-分析
-复现
-规划
-执行
-沉淀
-```
-
-从一次问题输入，逐步延伸为完整的软件工程与科研协作流程。
-
----
-
-<a id="contributors"></a>
-
-## 15 · Contributors / 项目贡献者
-
-<p align="right"><code>SCIPILOT::TEAM_15</code></p>
-
-<div align="center">
-
-<a href="https://github.com/telitor/SciPilot/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=telitor/SciPilot" />
-</a>
-
-<br/><br/>
-
-<sub>
-Designed, engineered and continuously evolved by the SciPilot team.
-</sub>
-
-</div>
+- [数据库部署与使用指南](docs/DATABASE_GUIDE.md)
+- [知识库使用与验收指南](docs/KNOWLEDGE_BASE_GUIDE.md)
+- [微调模型 HTTP 调用说明](模型微调/SciPilot微调大模型HTTP调用说明.md)
+- [微调模型 WebSocket 调用说明](模型微调/SciPilot微调大模型WebSocket调用说明.md)
 
 ---
 
 <div align="center">
 
-<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&height=120&color=0:1E3A5F,52:111827,100:080C16&section=footer" />
+### SciPilot
 
-<h2>SciPilot</h2>
+**Turn research material into grounded, traceable and executable work.**
 
-### Five Agents · One Intelligence Core · Infinite Research Possibilities
-
-**From fragmented research tasks to executable intelligent workflows.**
-
-<br/>
-
-<sub><strong>Research Understanding</strong>&nbsp;&nbsp;·&nbsp;&nbsp;<strong>Engineering Execution</strong>&nbsp;&nbsp;·&nbsp;&nbsp;<strong>Agent Collaboration</strong></sub>
+<sub>Research Understanding · Engineering Reproduction · Knowledge Grounding</sub>
 
 <br/><br/>
 
-<code>SCIPILOT // RESEARCH INTELLIGENCE SYSTEM // OPERATIONAL</code>
+<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&height=110&color=0:0F766E,50:12304A,100:07111F&section=footer" alt="SciPilot footer" />
 
 </div>
