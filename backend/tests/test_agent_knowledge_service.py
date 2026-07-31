@@ -106,6 +106,27 @@ class AgentKnowledgeServiceTests(unittest.TestCase):
         self.assertIn("[1]", reply)
         self.assertEqual(mode, "extractive")
 
+    def test_finetuned_model_is_used_before_other_model_routes(self):
+        citations = service.build_citations(self.rows)
+        with (
+            patch.object(service, "is_finetuned_model_configured", return_value=True),
+            patch.object(
+                service,
+                "call_finetuned_model",
+                return_value="应固定依赖版本并记录随机种子 [1]。",
+            ) as fine_tuned,
+        ):
+            reply, mode, model = service.grounded_agent_reply(
+                agent=self.agent,
+                message="如何复现实验？",
+                citations=citations,
+            )
+
+        self.assertEqual(reply, "应固定依赖版本并记录随机种子 [1]。")
+        self.assertEqual(mode, "model")
+        self.assertEqual(model, "scipilot-finetuned")
+        fine_tuned.assert_called_once()
+
     def test_valid_model_citation_is_kept(self):
         citations = service.build_citations(self.rows)
         with (

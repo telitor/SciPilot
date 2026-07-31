@@ -4,6 +4,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from services.finetuned_model_service import (
+    call_finetuned_model,
+    is_finetuned_model_configured,
+)
 from services.xunfei_agent_service import call_paper_reading_agent
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
@@ -64,6 +68,12 @@ def generate_reply(
     其他类型:
         暂时调用默认 LLM 或 mock 回复。
     """
+
+    if is_finetuned_model_configured():
+        return call_finetuned_model(
+            system_prompt=system_prompt,
+            user_message=user_message,
+        )
 
     if agent_category == "paper-reading":
         return call_paper_reading_agent(

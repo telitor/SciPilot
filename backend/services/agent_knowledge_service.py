@@ -2,6 +2,10 @@ import os
 import re
 from typing import Any
 
+from services.finetuned_model_service import (
+    call_finetuned_model,
+    is_finetuned_model_configured,
+)
 from services.llm_service import call_default_llm, generate_reply
 
 
@@ -110,9 +114,10 @@ def grounded_agent_reply(
         return NO_EVIDENCE_REPLY, "no-evidence", None
 
     category = str(agent.get("category") or "")
+    has_finetuned_model = is_finetuned_model_configured()
     has_default_llm = bool(os.getenv("LLM_API_KEY"))
     has_xunfei = category == "paper-reading" and _xunfei_configured()
-    if not has_default_llm and not has_xunfei:
+    if not has_finetuned_model and not has_default_llm and not has_xunfei:
         return extractive_fallback(citations), "extractive", None
 
     grounded_system_prompt = (
@@ -128,7 +133,13 @@ def grounded_agent_reply(
     )
 
     try:
-        if has_xunfei:
+        if has_finetuned_model:
+            reply = call_finetuned_model(
+                system_prompt=grounded_system_prompt,
+                user_message=grounded_message,
+            )
+            model = "scipilot-finetuned"
+        elif has_xunfei:
             # The Xunfei assistant API has no separate system-message argument,
             # so its grounded constraints are included in the user payload.
             reply = generate_reply(
