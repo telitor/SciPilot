@@ -65,6 +65,12 @@ class AgentKnowledgeAskRequest(BaseModel):
     top_k: int = Field(default=8, ge=1, le=20)
 
 
+class XunfeiKnowledgeAskRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=10_000)
+    top_n: int = Field(default=6, ge=1, le=20)
+    thinking_output: bool = False
+
+
 class CreateConversationRequest(BaseModel):
     title: str = Field(default="新的对话", max_length=200)
     module: str = Field(default="general", max_length=50)

@@ -48,6 +48,7 @@ from api.schemas import (
     RepoAnalysisRequest,
     ResearchDecomposeRequest,
     UpdateProfileRequest,
+    XunfeiKnowledgeAskRequest,
 )
 from services.agent_knowledge_service import build_citations, grounded_agent_reply
 from services.knowledge_base_service import (
@@ -60,6 +61,12 @@ from services.knowledge_base_service import (
 )
 from services.llm_service import call_default_llm
 from services.supabase_service import get_supabase_auth_client
+from services.xunfei_knowledge_base_service import (
+    XunfeiKnowledgeBaseError,
+    ask_xunfei_knowledge_base,
+    is_xunfei_knowledge_base_configured,
+    xunfei_knowledge_base_mode,
+)
 
 router = APIRouter()
 
@@ -495,6 +502,11 @@ def _agent_knowledge_answer(
 ) -> dict[str, Any]:
     if collection_id:
         _require_visible_kb_collection(collection_id, user_id)
+
+    xunfei_mode = xunfei_knowledge_base_mode()
+    if not collection_id and xunfei_mode == "prefer":
+        return _xunfei_knowledge_answer(message=message, top_n=top_k)
+
     rows = _search_knowledge_base(
         query=message,
         user_id=user_id,
@@ -502,6 +514,9 @@ def _agent_knowledge_answer(
         top_k=top_k,
     )
     citations = build_citations(rows)
+    if not collection_id and not citations and xunfei_mode == "fallback":
+        return _xunfei_knowledge_answer(message=message, top_n=top_k)
+
     reply, response_mode, model = grounded_agent_reply(
         agent=agent,
         message=message,
@@ -519,6 +534,28 @@ def _agent_knowledge_answer(
         ),
         "response_mode": response_mode,
         "model": model,
+        "provider_metadata": {},
+    }
+
+
+def _xunfei_knowledge_answer(*, message: str, top_n: int) -> dict[str, Any]:
+    try:
+        result = ask_xunfei_knowledge_base(message, top_n=min(top_n, 20))
+    except XunfeiKnowledgeBaseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    return {
+        "reply": result["reply"],
+        "rows": [],
+        "citations": result["citations"],
+        "knowledge_used": bool(result["citations"]),
+        "retrieval_mode": "xunfei-chatdoc",
+        "response_mode": "xunfei-knowledge-base",
+        "model": "xunfei-chatdoc",
+        "provider_metadata": {
+            "provider": "xunfei-chatdoc",
+            "sid": result["sid"],
+            "reference_count": len(result["citations"]),
+        },
     }
 
 
@@ -570,6 +607,7 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
                     "knowledge_used": answer["knowledge_used"],
                     "retrieval_mode": answer["retrieval_mode"],
                     "response_mode": answer["response_mode"],
+                    **answer.get("provider_metadata", {}),
                 },
             }
         )
@@ -603,6 +641,7 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
         extra_metadata={
             "knowledge_used": answer["knowledge_used"],
             "response_mode": answer["response_mode"],
+            **answer.get("provider_metadata", {}),
         },
     )
     if retrieval_id:
@@ -1133,6 +1172,7 @@ def ask_agent_with_knowledge(
         extra_metadata={
             "knowledge_used": answer["knowledge_used"],
             "response_mode": answer["response_mode"],
+            **answer.get("provider_metadata", {}),
         },
     )
     record_activity(
@@ -1252,6 +1292,50 @@ def legacy_chat(payload: LegacyChatRequest, user=Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 # Knowledge base
 # ---------------------------------------------------------------------------
+
+
+@router.get("/knowledge/xunfei/status")
+def xunfei_knowledge_status(user=Depends(get_current_user)):
+    return {
+        "provider": "xunfei-chatdoc",
+        "configured": is_xunfei_knowledge_base_configured(),
+        "mode": xunfei_knowledge_base_mode(),
+        "repository_configured": bool(os.getenv("XFYUN_KB_REPO_ID", "").strip()),
+    }
+
+
+@router.post("/knowledge/xunfei/answer")
+def answer_from_xunfei_knowledge_base(
+    payload: XunfeiKnowledgeAskRequest,
+    user=Depends(get_current_user),
+):
+    try:
+        result = ask_xunfei_knowledge_base(
+            payload.message.strip(),
+            top_n=payload.top_n,
+            thinking_output=payload.thinking_output,
+        )
+    except XunfeiKnowledgeBaseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    record_activity(
+        str(user.id),
+        "knowledge",
+        "星火知识库问答",
+        payload.message[:200],
+        metadata={
+            "provider": "xunfei-chatdoc",
+            "sid": result["sid"],
+            "citation_count": len(result["citations"]),
+        },
+    )
+    return {
+        "query": payload.message,
+        "answer": result["reply"],
+        "reasoning": result["reasoning"],
+        "citations": result["citations"],
+        "sid": result["sid"],
+        "provider": "xunfei-chatdoc",
+    }
 
 
 @router.get("/knowledge/status")
