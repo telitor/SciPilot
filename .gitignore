@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 .env.local
+.xfyun-upload-state.json
 frontend/.env.local
 backend/.env
 frontend/.env
@@ -27,6 +28,7 @@ frontend/node_modules/
 dist/
 frontend/dist/
 build/
+target/
 out/
 .next/
 npm-debug.log*
