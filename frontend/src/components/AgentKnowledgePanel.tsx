@@ -21,7 +21,6 @@ import type {
 
 interface AgentKnowledgePanelProps {
   category: AgentCategory;
-  collectionId?: string;
   className?: string;
   compact?: boolean;
 }
@@ -62,7 +61,6 @@ function citationKey(citation: AgentKnowledgeCitation, index: number) {
 
 export default function AgentKnowledgePanel({
   category,
-  collectionId,
   className = '',
   compact = false,
 }: AgentKnowledgePanelProps) {
@@ -114,7 +112,6 @@ export default function AgentKnowledgePanel({
     try {
       const response = await agentKnowledgeAPI.ask(agent.id, {
         message,
-        collection_id: collectionId,
         top_k: 6,
       });
       setAnswer(response.data);
@@ -190,7 +187,7 @@ export default function AgentKnowledgePanel({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="flex items-center gap-1.5 text-xs text-sci-muted">
                 <BookOpenCheck size={13} className="text-sci-accent" />
-                回答会检索已授权的知识库文档，并保留可核查引用
+                回答会检索外接星火论文知识库，并保留可核查引用
               </p>
               <button
                 type="submit"
@@ -230,11 +227,6 @@ export default function AgentKnowledgePanel({
                 <span className="text-xs text-sci-muted">
                   回答智能体：{answer.agent?.name || agent.name}
                 </span>
-                {answer.retrieval_id && (
-                  <span className="text-xs text-sci-muted" title={answer.retrieval_id}>
-                    检索记录 {answer.retrieval_id.slice(0, 8)}
-                  </span>
-                )}
               </div>
 
               <div className="rounded-xl border border-sci-primary/25 bg-sci-primary/5 p-4">

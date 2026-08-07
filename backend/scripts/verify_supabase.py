@@ -23,12 +23,6 @@ REQUIRED_TABLES = [
     "catalog_resources",
     "knowledge_nodes",
     "knowledge_edges",
-    "kb_collections",
-    "kb_documents",
-    "kb_chunks",
-    "kb_ingestion_jobs",
-    "kb_retrievals",
-    "kb_citations",
 ]
 
 
@@ -53,7 +47,7 @@ def main() -> int:
         }
     except Exception:
         buckets = set()
-    for bucket in ("papers", "knowledge-base"):
+    for bucket in ("papers",):
         if bucket in buckets:
             print(f"[OK] private storage bucket visible: {bucket}")
         else:

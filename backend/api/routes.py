@@ -28,19 +28,19 @@ from api.dependencies import (
     format_user,
     get_current_user,
     get_or_create_profile,
+    local_demo_login,
+    local_demo_mode_enabled,
+    local_demo_token,
     record_activity,
     require_owned_row,
 )
 from api.schemas import (
     AgentKnowledgeAskRequest,
+    DashboardChatRequest,
     CreateConversationRequest,
     DiagnoseRequest,
     ExperimentRoadmapRequest,
-    KnowledgeAnswerRequest,
-    KnowledgeCollectionRequest,
-    KnowledgeCollectionUpdateRequest,
-    KnowledgeSearchRequest,
-    KnowledgeTextDocumentRequest,
+    KnowledgeQueryRequest,
     LegacyChatRequest,
     LoginRequest,
     NewMessageRequest,
@@ -48,24 +48,17 @@ from api.schemas import (
     RepoAnalysisRequest,
     ResearchDecomposeRequest,
     UpdateProfileRequest,
-    XunfeiKnowledgeAskRequest,
 )
-from services.agent_knowledge_service import build_citations, grounded_agent_reply
-from services.knowledge_base_service import (
-    chunk_knowledge_text,
-    create_embedding,
-    estimate_tokens,
-    extract_knowledge_text,
-    safe_filename as safe_kb_filename,
-    sha256_bytes,
+from services.finetuned_model_service import (
+    call_finetuned_model,
+    model_service_status,
 )
-from services.llm_service import call_default_llm
 from services.supabase_service import get_supabase_auth_client
 from services.xunfei_knowledge_base_service import (
     XunfeiKnowledgeBaseError,
-    ask_xunfei_knowledge_base,
+    get_xunfei_knowledge_status,
     is_xunfei_knowledge_base_configured,
-    xunfei_knowledge_base_mode,
+    search_xunfei_knowledge_base,
 )
 
 router = APIRouter()
@@ -158,310 +151,6 @@ def _save_artifact(
     return result.data[0]
 
 
-def _require_visible_kb_collection(
-    collection_id: str,
-    user_id: str,
-) -> dict[str, Any]:
-    """Authorize reads from an owned private or globally public collection."""
-
-    try:
-        result = (
-            database()
-            .table("kb_collections")
-            .select("*")
-            .eq("id", collection_id)
-            .limit(1)
-            .execute()
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=409,
-            detail="知识库表尚未部署，请先执行迁移 008_knowledge_base.sql",
-        ) from None
-    collection = _first(result)
-    if not collection or (
-        str(collection.get("user_id")) != user_id
-        and not bool(collection.get("is_public"))
-    ):
-        # Do not reveal the existence of another user's private collection.
-        raise HTTPException(status_code=404, detail="知识库集合不存在或无权访问")
-    return collection
-
-
-def _require_writable_kb_collection(
-    collection_id: str,
-    user: Any,
-) -> dict[str, Any]:
-    """
-    Authorize collection mutations.
-
-    Private collections remain owner-only. Public/system-managed collections
-    are readable by all authenticated users but writable only by administrators.
-    """
-
-    user_id = str(user.id)
-    collection = _require_visible_kb_collection(collection_id, user_id)
-    metadata = collection.get("metadata") or {}
-    is_managed = bool(metadata.get("system_managed"))
-    if bool(collection.get("is_public")) or is_managed:
-        profile = get_or_create_profile(user)
-        if profile.get("role") != "admin":
-            raise HTTPException(
-                status_code=403,
-                detail="公共或系统知识库只能由管理员修改",
-            )
-        return collection
-    if str(collection.get("user_id")) != user_id:
-        raise HTTPException(status_code=404, detail="知识库集合不存在或无权写入")
-    return collection
-
-
-def _default_kb_collection(user_id: str) -> dict[str, Any]:
-    try:
-        existing = (
-            database()
-            .table("kb_collections")
-            .select("*")
-            .eq("user_id", user_id)
-            .eq("name", "我的知识库")
-            .limit(1)
-            .execute()
-        )
-        collection = _first(existing)
-        if collection:
-            return collection
-        created = (
-            database()
-            .table("kb_collections")
-            .insert(
-                {
-                    "user_id": user_id,
-                    "name": "我的知识库",
-                    "description": "自动创建的个人科研知识库",
-                    "is_public": False,
-                }
-            )
-            .execute()
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=409,
-            detail="知识库表尚未部署，请先执行迁移 008_knowledge_base.sql",
-        ) from None
-    collection = _first(created)
-    if not collection:
-        raise HTTPException(status_code=500, detail="创建默认知识库失败")
-    return collection
-
-
-def _search_knowledge_base(
-    *,
-    query: str,
-    user_id: str,
-    collection_id: str | None,
-    top_k: int,
-) -> list[dict[str, Any]]:
-    try:
-        query_embedding = create_embedding(query)
-    except Exception:
-        # Full-text search remains available when the optional embedding
-        # provider is unavailable or misconfigured.
-        query_embedding = None
-    try:
-        result = database().rpc(
-            "search_knowledge_base",
-            {
-                "query_text": query,
-                "query_embedding": query_embedding,
-                "match_count": top_k,
-                "filter_collection_id": collection_id,
-                "requesting_user_id": user_id,
-            },
-        ).execute()
-    except Exception:
-        raise HTTPException(
-            status_code=409,
-            detail="知识库检索尚未部署，请先执行迁移 008_knowledge_base.sql",
-        ) from None
-    return result.data or []
-
-
-def _record_kb_retrieval(
-    *,
-    user_id: str,
-    query: str,
-    rows: list[dict[str, Any]],
-    collection_id: str | None,
-    answer: str | None,
-    retrieval_mode: str,
-    conversation_id: str | None = None,
-    message_id: str | None = None,
-    agent: dict[str, Any] | None = None,
-    model: str | None = None,
-    extra_metadata: dict[str, Any] | None = None,
-) -> str | None:
-    """Persist an auditable search/citation snapshot without blocking results."""
-
-    try:
-        retrieval_result = (
-            database()
-            .table("kb_retrievals")
-            .insert(
-                {
-                    "user_id": user_id,
-                    "collection_id": collection_id,
-                    "conversation_id": conversation_id,
-                    "message_id": message_id,
-                    "query_text": query,
-                    "answer_text": answer,
-                    "retrieval_mode": retrieval_mode,
-                    "model": model,
-                    "metadata": {
-                        "result_count": len(rows),
-                        "agent_id": agent.get("id") if agent else None,
-                        "agent_category": agent.get("category") if agent else None,
-                        **(extra_metadata or {}),
-                    },
-                }
-            )
-            .execute()
-        )
-        retrieval = _first(retrieval_result)
-        if not retrieval:
-            return None
-        citation_rows = [
-            {
-                "retrieval_id": retrieval["id"],
-                "user_id": user_id,
-                "chunk_id": row.get("chunk_id"),
-                "document_id": row.get("document_id"),
-                "rank": rank,
-                "score": row.get("score"),
-                "document_title": row.get("document_title"),
-                "source_url": row.get("source_url"),
-                "file_name": row.get("file_name"),
-                "excerpt": (row.get("content") or "")[:1000],
-                "metadata": {"chunk_index": row.get("chunk_index")},
-            }
-            for rank, row in enumerate(rows, start=1)
-        ]
-        if citation_rows:
-            database().table("kb_citations").insert(citation_rows).execute()
-        return retrieval["id"]
-    except Exception:
-        return None
-
-
-def _store_kb_text_document(
-    *,
-    user_id: str,
-    collection_id: str,
-    title: str,
-    text: str,
-    source_type: str,
-    checksum: str,
-    source_url: str | None = None,
-    storage_path: str | None = None,
-    file_name: str | None = None,
-    mime_type: str | None = None,
-    file_size: int | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    chunks = chunk_knowledge_text(text)
-    if not chunks:
-        raise HTTPException(status_code=422, detail="文档无法切分为有效知识片段")
-
-    document: dict[str, Any] | None = None
-    try:
-        created = (
-            database()
-            .table("kb_documents")
-            .insert(
-                {
-                    "collection_id": collection_id,
-                    "user_id": user_id,
-                    "title": title[:500],
-                    "source_type": source_type,
-                    "source_url": source_url,
-                    "storage_path": storage_path,
-                    "file_name": file_name,
-                    "mime_type": mime_type,
-                    "file_size": file_size,
-                    "checksum": checksum,
-                    "status": "processing",
-                    "character_count": len(text),
-                    "metadata": metadata or {},
-                }
-            )
-            .execute()
-        )
-        document = _first(created)
-        if not document:
-            raise RuntimeError("数据库未返回文档记录")
-
-        chunk_rows: list[dict[str, Any]] = []
-        embedded_count = 0
-        for index, chunk in enumerate(chunks):
-            try:
-                embedding = create_embedding(chunk)
-            except Exception:
-                embedding = None
-            if embedding is not None:
-                embedded_count += 1
-            chunk_rows.append(
-                {
-                    "document_id": document["id"],
-                    "collection_id": collection_id,
-                    "user_id": user_id,
-                    "chunk_index": index,
-                    "title": document["title"],
-                    "content": chunk,
-                    "token_count": estimate_tokens(chunk),
-                    "embedding": embedding,
-                    "metadata": {},
-                }
-            )
-        for start in range(0, len(chunk_rows), 50):
-            database().table("kb_chunks").insert(chunk_rows[start : start + 50]).execute()
-
-        completed_metadata = {
-            **(metadata or {}),
-            "embedded_chunks": embedded_count,
-            "retrieval": "hybrid" if embedded_count else "full-text",
-        }
-        completed = (
-            database()
-            .table("kb_documents")
-            .update(
-                {
-                    "status": "ready",
-                    "chunk_count": len(chunk_rows),
-                    "metadata": completed_metadata,
-                }
-            )
-            .eq("id", document["id"])
-            .eq("user_id", user_id)
-            .execute()
-        )
-        return _first(completed) or {
-            **document,
-            "status": "ready",
-            "chunk_count": len(chunk_rows),
-            "metadata": completed_metadata,
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        if document:
-            try:
-                database().table("kb_documents").update(
-                    {"status": "failed", "metadata": {"error": str(exc)[:500]}}
-                ).eq("id", document["id"]).eq("user_id", user_id).execute()
-            except Exception:
-                pass
-        raise HTTPException(status_code=500, detail="知识库文档切块或入库失败") from None
-
-
 def _pick_agent(module: str, agent_id: str | None = None) -> dict[str, Any]:
     query = database().table("agents").select(
         "id,name,description,system_prompt,category,is_public"
@@ -492,70 +181,131 @@ def _pick_agent(module: str, agent_id: str | None = None) -> dict[str, Any]:
     return agent
 
 
+def _upstream_error(service_name: str) -> HTTPException:
+    return HTTPException(
+        status_code=502,
+        detail=f"{service_name}暂时不可用，请稍后重试",
+    )
+
+
+def _search_external_knowledge(
+    message: str,
+    *,
+    top_n: int,
+) -> list[dict[str, Any]]:
+    try:
+        return search_xunfei_knowledge_base(message.strip(), top_n=top_n)
+    except (XunfeiKnowledgeBaseError, ValueError):
+        raise _upstream_error("星火知识库") from None
+    except Exception:
+        # Never expose provider response bodies, request URLs, or credentials.
+        raise _upstream_error("星火知识库") from None
+
+
+def _knowledge_context(citations: list[dict[str, Any]]) -> str:
+    blocks: list[str] = []
+    remaining = 24_000
+    for position, citation in enumerate(citations[:10], start=1):
+        excerpt = str(citation.get("excerpt") or "").strip()
+        if not excerpt or remaining <= 0:
+            continue
+        excerpt = excerpt[: min(3_000, remaining)]
+        remaining -= len(excerpt)
+        index = citation.get("index") or position
+        title = citation.get("title") or citation.get("file_name") or "未命名论文"
+        blocks.append(f"[{index}] {title}\n{excerpt}")
+    return "\n\n".join(blocks)
+
+
+def _evidence_only_answer(citations: list[dict[str, Any]]) -> str:
+    if not citations:
+        return "当前星火知识库没有检索到足以回答该问题的论文证据。"
+    excerpts = []
+    for position, citation in enumerate(citations[:5], start=1):
+        index = citation.get("index") or position
+        title = citation.get("title") or citation.get("file_name") or "未命名论文"
+        excerpt = str(citation.get("excerpt") or "").strip()[:800]
+        excerpts.append(f"[{index}] {title}：{excerpt}")
+    return "当前未启用 MaaS 生成模型，以下是可核验的相关论文原文摘录：\n\n" + "\n\n".join(
+        excerpts
+    )
+
+
+def _knowledge_system_prompt(
+    base_prompt: str,
+    citations: list[dict[str, Any]],
+    *,
+    knowledge_requested: bool,
+) -> str:
+    prompt = base_prompt.strip()
+    if citations:
+        return (
+            f"{prompt}\n\n"
+            "你必须仅依据下方“检索证据”回答涉及事实的内容。"
+            "每个实质性结论都使用 [数字] 标注来源；证据不足时明确说明，"
+            "不得编造论文、作者、数据或引用。\n\n"
+            f"检索证据：\n{_knowledge_context(citations)}"
+        )
+    if knowledge_requested:
+        return (
+            f"{prompt}\n\n"
+            "本次星火知识库检索没有返回证据。请明确说明证据不足，"
+            "不要编造论文内容或引用。"
+        )
+    return prompt
+
+
+def _call_maas(
+    messages: list[dict[str, str]],
+    *,
+    system_prompt: str,
+) -> str:
+    try:
+        return call_finetuned_model(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                *messages,
+            ]
+        )
+    except Exception:
+        # The upstream SDK may include request details in exception strings.
+        raise _upstream_error("对话模型") from None
+
+
 def _agent_knowledge_answer(
     *,
     agent: dict[str, Any],
     message: str,
-    user_id: str,
-    collection_id: str | None,
     top_k: int,
+    history: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    if collection_id:
-        _require_visible_kb_collection(collection_id, user_id)
-
-    xunfei_mode = xunfei_knowledge_base_mode()
-    if not collection_id and xunfei_mode == "prefer":
-        return _xunfei_knowledge_answer(message=message, top_n=top_k)
-
-    rows = _search_knowledge_base(
-        query=message,
-        user_id=user_id,
-        collection_id=collection_id,
-        top_k=top_k,
-    )
-    citations = build_citations(rows)
-    if not collection_id and not citations and xunfei_mode == "fallback":
-        return _xunfei_knowledge_answer(message=message, top_n=top_k)
-
-    reply, response_mode, model = grounded_agent_reply(
-        agent=agent,
-        message=message,
-        citations=citations,
-        user_id=user_id,
-    )
+    citations = _search_external_knowledge(message, top_n=top_k)
+    model_status = model_service_status()
+    model = model_status.get("model") if model_status.get("available") else None
+    if citations and model_status.get("available"):
+        conversation = history or [{"role": "user", "content": message}]
+        reply = _call_maas(
+            conversation,
+            system_prompt=_knowledge_system_prompt(
+                str(
+                    agent.get("system_prompt")
+                    or "你是 SciPilot 科研智能体，请提供严谨、清晰且可复核的回答。"
+                ),
+                citations,
+                knowledge_requested=True,
+            ),
+        )
+        response_mode = "xunfei-rag-maas"
+    else:
+        reply = _evidence_only_answer(citations)
+        response_mode = "xunfei-evidence-only"
     return {
         "reply": reply,
-        # Store exactly the evidence that was exposed to the model/client.
-        "rows": rows[: len(citations)],
         "citations": citations,
         "knowledge_used": bool(citations),
-        "retrieval_mode": (
-            "hybrid" if os.getenv("EMBEDDING_API_KEY") else "full-text"
-        ),
+        "retrieval_mode": "xunfei-vector-search",
         "response_mode": response_mode,
         "model": model,
-        "provider_metadata": {},
-    }
-
-
-def _xunfei_knowledge_answer(*, message: str, top_n: int) -> dict[str, Any]:
-    try:
-        result = ask_xunfei_knowledge_base(message, top_n=min(top_n, 20))
-    except XunfeiKnowledgeBaseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from None
-    return {
-        "reply": result["reply"],
-        "rows": [],
-        "citations": result["citations"],
-        "knowledge_used": bool(result["citations"]),
-        "retrieval_mode": "xunfei-chatdoc",
-        "response_mode": "xunfei-knowledge-base",
-        "model": "xunfei-chatdoc",
-        "provider_metadata": {
-            "provider": "xunfei-chatdoc",
-            "sid": result["sid"],
-            "reference_count": len(result["citations"]),
-        },
     }
 
 
@@ -578,19 +328,33 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
     if not user_message.data:
         raise HTTPException(status_code=500, detail="保存消息失败")
 
-    context = conversation.get("context") or {}
-    collection_id = (
-        context.get("collection_id") if isinstance(context, dict) else None
+    history_result = (
+        database()
+        .table("messages")
+        .select("role,content,created_at")
+        .eq("conversation_id", conversation["id"])
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(20)
+        .execute()
     )
+    history = [
+        {
+            "role": str(item.get("role")),
+            "content": str(item.get("content") or "").strip(),
+        }
+        for item in reversed(history_result.data or [])
+        if item.get("role") in {"user", "assistant"} and item.get("content")
+    ]
+    if not history or history[-1]["role"] != "user":
+        history.append({"role": "user", "content": content})
+
     answer = _agent_knowledge_answer(
         agent=agent,
         message=content,
-        user_id=user_id,
-        collection_id=collection_id,
         top_k=8,
+        history=history,
     )
-    reply = answer["reply"]
-
     assistant = (
         database()
         .table("messages")
@@ -600,14 +364,13 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
                 "user_id": user_id,
                 "agent_id": agent["id"],
                 "role": "assistant",
-                "content": reply,
+                "content": answer["reply"],
                 "citations": answer["citations"],
                 "model": answer["model"],
                 "metadata": {
                     "knowledge_used": answer["knowledge_used"],
                     "retrieval_mode": answer["retrieval_mode"],
                     "response_mode": answer["response_mode"],
-                    **answer.get("provider_metadata", {}),
                 },
             }
         )
@@ -624,44 +387,15 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
         entity_type="conversation",
         entity_id=conversation["id"],
     )
-    message = _first(assistant)
-    if not message:
+    saved_message = _first(assistant)
+    if not saved_message:
         raise HTTPException(status_code=500, detail="保存智能体回复失败")
-    retrieval_id = _record_kb_retrieval(
-        user_id=user_id,
-        query=content,
-        rows=answer["rows"],
-        collection_id=collection_id,
-        answer=reply,
-        retrieval_mode=answer["retrieval_mode"],
-        conversation_id=conversation["id"],
-        message_id=message["id"],
-        agent=agent,
-        model=answer["model"],
-        extra_metadata={
-            "knowledge_used": answer["knowledge_used"],
-            "response_mode": answer["response_mode"],
-            **answer.get("provider_metadata", {}),
-        },
-    )
-    if retrieval_id:
-        message_metadata = {
-            **(message.get("metadata") or {}),
-            "retrieval_id": retrieval_id,
-        }
-        try:
-            database().table("messages").update(
-                {"metadata": message_metadata}
-            ).eq("id", message["id"]).eq("user_id", user_id).execute()
-        except Exception:
-            pass
-        message["metadata"] = message_metadata
     return {
-        "reply": reply,
-        "message": message,
+        "reply": answer["reply"],
+        "message": saved_message,
         "citations": answer["citations"],
         "knowledge_used": answer["knowledge_used"],
-        "retrieval_id": retrieval_id,
+        "model": answer["model"],
         "agent": {
             key: agent.get(key)
             for key in ("id", "name", "description", "category", "is_public")
@@ -808,6 +542,14 @@ def register(payload: RegisterRequest):
 
 @router.post("/auth/login")
 def login(payload: LoginRequest):
+    if local_demo_mode_enabled():
+        demo_user = local_demo_login(payload.email, payload.password)
+        if not demo_user:
+            raise _auth_error()
+        return {
+            "user": format_user(demo_user, get_or_create_profile(demo_user)),
+            "token": local_demo_token(),
+        }
     try:
         response = get_supabase_auth_client().auth.sign_in_with_password(
             {"email": payload.email.strip().lower(), "password": payload.password}
@@ -1156,34 +898,17 @@ def ask_agent_with_knowledge(
     answer = _agent_knowledge_answer(
         agent=agent,
         message=message,
-        user_id=user_id,
-        collection_id=payload.collection_id,
         top_k=payload.top_k,
-    )
-    retrieval_id = _record_kb_retrieval(
-        user_id=user_id,
-        query=message,
-        rows=answer["rows"],
-        collection_id=payload.collection_id,
-        answer=answer["reply"],
-        retrieval_mode=answer["retrieval_mode"],
-        agent=agent,
-        model=answer["model"],
-        extra_metadata={
-            "knowledge_used": answer["knowledge_used"],
-            "response_mode": answer["response_mode"],
-            **answer.get("provider_metadata", {}),
-        },
     )
     record_activity(
         user_id,
         agent.get("category") or "agent",
         "智能体知识问答",
         message[:200],
-        entity_type="kb_retrieval",
-        entity_id=retrieval_id,
+        entity_type="agent",
+        entity_id=agent["id"],
         metadata={
-            "agent_id": agent["id"],
+            "provider": "xunfei-chatdoc",
             "citation_count": len(answer["citations"]),
         },
     )
@@ -1191,7 +916,7 @@ def ask_agent_with_knowledge(
         "reply": answer["reply"],
         "citations": answer["citations"],
         "knowledge_used": answer["knowledge_used"],
-        "retrieval_id": retrieval_id,
+        "model": answer["model"],
         "agent": {
             key: agent.get(key)
             for key in ("id", "name", "description", "category", "is_public")
@@ -1290,683 +1015,180 @@ def legacy_chat(payload: LegacyChatRequest, user=Depends(get_current_user)):
 
 
 # ---------------------------------------------------------------------------
-# Knowledge base
+# External Spark knowledge base and dashboard MaaS chat
 # ---------------------------------------------------------------------------
 
 
-@router.get("/knowledge/xunfei/status")
-def xunfei_knowledge_status(user=Depends(get_current_user)):
-    return {
-        "provider": "xunfei-chatdoc",
-        "configured": is_xunfei_knowledge_base_configured(),
-        "mode": xunfei_knowledge_base_mode(),
-        "repository_configured": bool(os.getenv("XFYUN_KB_REPO_ID", "").strip()),
-    }
-
-
-@router.post("/knowledge/xunfei/answer")
-def answer_from_xunfei_knowledge_base(
-    payload: XunfeiKnowledgeAskRequest,
-    user=Depends(get_current_user),
-):
+def _public_knowledge_status() -> dict[str, Any]:
     try:
-        result = ask_xunfei_knowledge_base(
-            payload.message.strip(),
-            top_n=payload.top_n,
-            thinking_output=payload.thinking_output,
+        status = get_xunfei_knowledge_status()
+    except XunfeiKnowledgeBaseError:
+        raise _upstream_error("星火知识库") from None
+    except Exception:
+        raise _upstream_error("星火知识库") from None
+
+    files = []
+    for item in status.get("files") or []:
+        files.append(
+            {
+                "file_id": item.get("fileId") or item.get("file_id"),
+                "file_name": item.get("fileName") or item.get("file_name"),
+                "status": item.get("fileStatus") or item.get("status") or "unknown",
+                "extension": item.get("fileType") or item.get("extension"),
+                "created_at": item.get("createTime") or item.get("created_at"),
+            }
         )
-    except XunfeiKnowledgeBaseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from None
-    record_activity(
-        str(user.id),
-        "knowledge",
-        "星火知识库问答",
-        payload.message[:200],
-        metadata={
-            "provider": "xunfei-chatdoc",
-            "sid": result["sid"],
-            "citation_count": len(result["citations"]),
-        },
-    )
     return {
-        "query": payload.message,
-        "answer": result["reply"],
-        "reasoning": result["reasoning"],
-        "citations": result["citations"],
-        "sid": result["sid"],
-        "provider": "xunfei-chatdoc",
+        "provider": status.get("provider") or "xunfei-chatdoc",
+        "configured": bool(status.get("configured")),
+        "ready": bool(status.get("ready")),
+        "repository_name": status.get("repository_name"),
+        "document_count": int(status.get("document_count") or 0),
+        "vectored_count": int(status.get("vectored_count") or 0),
+        "files": files,
+        "reason": (
+            None
+            if status.get("ready")
+            else "星火知识库尚未完成服务端配置或远端仓库尚未就绪"
+        ),
     }
 
 
 @router.get("/knowledge/status")
+@router.get("/knowledge/xunfei/status")
 def knowledge_status(user=Depends(get_current_user)):
-    user_id = str(user.id)
-    try:
-        collections = (
-            database()
-            .table("kb_collections")
-            .select("id,user_id,is_public", count="exact")
-            .or_(f"is_public.eq.true,user_id.eq.{user_id}")
-            .execute()
-        )
-        collection_rows = collections.data or []
-        visible_ids = [row["id"] for row in collection_rows]
-        if visible_ids:
-            documents = (
-                database()
-                .table("kb_documents")
-                .select("id", count="exact")
-                .in_("collection_id", visible_ids)
-                .execute()
-            )
-            chunks = (
-                database()
-                .table("kb_chunks")
-                .select("id", count="exact")
-                .in_("collection_id", visible_ids)
-                .execute()
-            )
-            document_count = documents.count or len(documents.data or [])
-            chunk_count = chunks.count or len(chunks.data or [])
-        else:
-            document_count = 0
-            chunk_count = 0
-    except Exception:
-        return {
-            "ready": False,
-            "migration_required": True,
-            "migration": "008_knowledge_base.sql",
-            "collections": 0,
-            "documents": 0,
-            "chunks": 0,
-            "embedding_enabled": bool(os.getenv("EMBEDDING_API_KEY")),
-        }
-    return {
-        "ready": True,
-        "migration_required": False,
-        "collections": collections.count or len(collection_rows),
-        "documents": document_count,
-        "chunks": chunk_count,
-        "owned_collections": sum(
-            str(row.get("user_id")) == user_id for row in collection_rows
-        ),
-        "public_collections": sum(
-            bool(row.get("is_public")) for row in collection_rows
-        ),
-        "embedding_enabled": bool(os.getenv("EMBEDDING_API_KEY")),
-        "retrieval": "hybrid"
-        if os.getenv("EMBEDDING_API_KEY")
-        else "full-text",
-    }
-
-
-@router.get("/knowledge/collections")
-def list_knowledge_collections(user=Depends(get_current_user)):
-    user_id = str(user.id)
-    try:
-        result = (
-            database()
-            .table("kb_collections")
-            .select(
-                "id,user_id,name,description,is_public,document_count,metadata,"
-                "created_at,updated_at"
-            )
-            .or_(f"is_public.eq.true,user_id.eq.{user_id}")
-            .order("updated_at", desc=True)
-            .execute()
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=409,
-            detail="知识库表尚未部署，请先执行迁移 008_knowledge_base.sql",
-        ) from None
-    return {"items": result.data or [], "total": len(result.data or [])}
-
-
-@router.post("/knowledge/collections", status_code=201)
-def create_knowledge_collection(
-    payload: KnowledgeCollectionRequest,
-    user=Depends(get_current_user),
-):
-    user_id = str(user.id)
-    profile = get_or_create_profile(user)
-    if payload.is_public and profile.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="只有管理员可以创建公共知识库")
-    try:
-        result = (
-            database()
-            .table("kb_collections")
-            .insert(
-                {
-                    "user_id": user_id,
-                    "name": payload.name.strip(),
-                    "description": (payload.description or "").strip() or None,
-                    "is_public": payload.is_public,
-                }
-            )
-            .execute()
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=409,
-            detail="创建知识库失败；请确认迁移 008 已执行且名称未重复",
-        ) from None
-    collection = _first(result)
-    if not collection:
-        raise HTTPException(status_code=500, detail="创建知识库失败")
-    record_activity(
-        user_id,
-        "knowledge",
-        "创建知识库",
-        collection["name"],
-        entity_type="kb_collection",
-        entity_id=collection["id"],
-    )
-    return collection
-
-
-@router.patch("/knowledge/collections/{collection_id}")
-def update_knowledge_collection(
-    collection_id: str,
-    payload: KnowledgeCollectionUpdateRequest,
-    user=Depends(get_current_user),
-):
-    collection = _require_writable_kb_collection(collection_id, user)
-    changes = payload.model_dump(exclude_none=True)
-    if changes.get("name"):
-        changes["name"] = changes["name"].strip()
-    if "description" in changes:
-        changes["description"] = (changes["description"] or "").strip() or None
-    if changes.get("is_public"):
-        profile = get_or_create_profile(user)
-        if profile.get("role") != "admin":
-            raise HTTPException(status_code=403, detail="只有管理员可以发布公共知识库")
-    if not changes:
-        return collection
-    try:
-        result = (
-            database()
-            .table("kb_collections")
-            .update(changes)
-            .eq("id", collection_id)
-            .execute()
-        )
-    except Exception:
-        raise HTTPException(status_code=409, detail="更新失败，请检查知识库名称是否重复") from None
-    collection = _first(result)
-    if not collection:
-        raise HTTPException(status_code=404, detail="知识库集合不存在")
-    return collection
-
-
-@router.delete("/knowledge/collections/{collection_id}", status_code=204)
-def delete_knowledge_collection(
-    collection_id: str,
-    user=Depends(get_current_user),
-):
-    _require_writable_kb_collection(collection_id, user)
-    documents = (
-        database()
-        .table("kb_documents")
-        .select("storage_path")
-        .eq("collection_id", collection_id)
-        .execute()
-        .data
-        or []
-    )
-    paths = [row["storage_path"] for row in documents if row.get("storage_path")]
-    if paths:
-        try:
-            database().storage.from_("knowledge-base").remove(paths)
-        except Exception:
-            raise HTTPException(
-                status_code=409,
-                detail="文件清理失败，知识库尚未删除，请稍后重试",
-            ) from None
-    database().table("kb_collections").delete().eq("id", collection_id).execute()
-    return Response(status_code=204)
-
-
-@router.get("/knowledge/documents")
-def list_knowledge_documents(
-    collection_id: str | None = None,
-    page: int = Query(default=1, ge=1),
-    limit: int = Query(default=20, ge=1, le=100),
-    user=Depends(get_current_user),
-):
-    user_id = str(user.id)
-    if collection_id:
-        visible_collections = [
-            _require_visible_kb_collection(collection_id, user_id)
-        ]
-    else:
-        try:
-            visible_collections = (
-                database()
-                .table("kb_collections")
-                .select("id")
-                .or_(f"is_public.eq.true,user_id.eq.{user_id}")
-                .execute()
-                .data
-                or []
-            )
-        except Exception:
-            raise HTTPException(
-                status_code=409,
-                detail="知识库表尚未部署，请先执行迁移 008_knowledge_base.sql",
-            ) from None
-    visible_collection_ids = [row["id"] for row in visible_collections]
-    if not visible_collection_ids:
-        return {
-            "items": [],
-            "page": page,
-            "limit": limit,
-            "total": 0,
-        }
-    query = (
-        database()
-        .table("kb_documents")
-        .select(
-            "id,collection_id,title,source_type,source_url,file_name,mime_type,"
-            "file_size,checksum,status,chunk_count,character_count,metadata,"
-            "created_at,updated_at",
-            count="exact",
-        )
-        .in_("collection_id", visible_collection_ids)
-    )
-    try:
-        result = (
-            query.order("updated_at", desc=True)
-            .range((page - 1) * limit, page * limit - 1)
-            .execute()
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=409,
-            detail="知识库表尚未部署，请先执行迁移 008_knowledge_base.sql",
-        ) from None
-    return {
-        "items": result.data or [],
-        "page": page,
-        "limit": limit,
-        "total": result.count if result.count is not None else len(result.data or []),
-    }
-
-
-@router.get("/knowledge/documents/{document_id}")
-def get_knowledge_document(
-    document_id: str,
-    page: int = Query(default=1, ge=1),
-    limit: int = Query(default=20, ge=1, le=100),
-    user=Depends(get_current_user),
-):
-    user_id = str(user.id)
-    document_result = (
-        database()
-        .table("kb_documents")
-        .select(
-            "id,collection_id,title,source_type,source_url,file_name,mime_type,"
-            "file_size,checksum,status,chunk_count,character_count,metadata,"
-            "created_at,updated_at"
-        )
-        .eq("id", document_id)
-        .limit(1)
-        .execute()
-    )
-    document = _first(document_result)
-    if not document:
-        raise HTTPException(status_code=404, detail="知识库文档不存在")
-    _require_visible_kb_collection(document["collection_id"], user_id)
-    chunks = (
-        database()
-        .table("kb_chunks")
-        .select("id,chunk_index,title,content,token_count,metadata,created_at", count="exact")
-        .eq("document_id", document_id)
-        .order("chunk_index")
-        .range((page - 1) * limit, page * limit - 1)
-        .execute()
-    )
-    return {
-        **document,
-        "chunks": chunks.data or [],
-        "chunk_page": page,
-        "chunk_total": chunks.count if chunks.count is not None else len(chunks.data or []),
-    }
-
-
-@router.post("/knowledge/documents/upload", status_code=201)
-async def upload_knowledge_document(
-    file: UploadFile = File(...),
-    collection_id: str | None = Form(default=None),
-    title: str | None = Form(default=None),
-    user=Depends(get_current_user),
-):
-    user_id = str(user.id)
-    collection = (
-        _require_writable_kb_collection(collection_id, user)
-        if collection_id
-        else _default_kb_collection(user_id)
-    )
-    max_bytes = int(os.getenv("MAX_KB_UPLOAD_MB", "25")) * 1024 * 1024
-    content = await file.read(max_bytes + 1)
-    if not content or len(content) > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"知识库文件为空或超过 {max_bytes // 1024 // 1024}MB",
-        )
-    file_name = file.filename or "knowledge-document"
-    try:
-        extracted = extract_knowledge_text(content, file_name)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from None
-    text = extracted["text"].strip()
-    if not text:
-        raise HTTPException(
-            status_code=422,
-            detail="未提取到文本；扫描版 PDF 请先执行 OCR",
-        )
-    max_chars = int(os.getenv("MAX_KB_EXTRACTED_CHARS", "2000000"))
-    was_truncated = len(text) > max_chars
-    text = text[:max_chars]
-
-    checksum = sha256_bytes(content)
-    duplicate = (
-        database()
-        .table("kb_documents")
-        .select("*")
-        .eq("collection_id", collection["id"])
-        .eq("checksum", checksum)
-        .limit(1)
-        .execute()
-    )
-    existing = _first(duplicate)
-    if existing:
-        return {**existing, "duplicate": True}
-
-    storage_path = (
-        f"{user_id}/{collection['id']}/{uuid.uuid4()}-{safe_kb_filename(file_name)}"
-    )
-    try:
-        database().storage.from_("knowledge-base").upload(
-            storage_path,
-            content,
-            file_options={
-                "content-type": file.content_type or "application/octet-stream",
-                "upsert": "false",
-            },
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=409,
-            detail="知识库文件桶尚未部署或上传失败，请先执行迁移 008",
-        ) from None
-
-    try:
-        result_document = _store_kb_text_document(
-            user_id=user_id,
-            collection_id=collection["id"],
-            title=title or extracted["title"] or Path(file_name).stem,
-            text=text,
-            source_type=extracted["source_type"],
-            storage_path=storage_path,
-            file_name=file_name[:500],
-            mime_type=file.content_type or "application/octet-stream",
-            file_size=len(content),
-            checksum=checksum,
-            metadata={
-                "page_count": extracted.get("page_count"),
-                "truncated": was_truncated,
-            },
-        )
-    except Exception:
-        persisted = (
-            database()
-            .table("kb_documents")
-            .select("id")
-            .eq("collection_id", collection["id"])
-            .eq("checksum", checksum)
-            .limit(1)
-            .execute()
-        )
-        if not persisted.data:
-            try:
-                database().storage.from_("knowledge-base").remove([storage_path])
-            except Exception:
-                pass
-        raise
-
-    record_activity(
-        user_id,
-        "knowledge",
-        "导入知识文档",
-        result_document["title"],
-        entity_type="kb_document",
-        entity_id=result_document["id"],
-        metadata={"chunks": result_document.get("chunk_count", 0)},
-    )
-    return result_document
-
-
-@router.post("/knowledge/documents/text", status_code=201)
-def create_knowledge_text_document(
-    payload: KnowledgeTextDocumentRequest,
-    user=Depends(get_current_user),
-):
-    user_id = str(user.id)
-    collection = (
-        _require_writable_kb_collection(payload.collection_id, user)
-        if payload.collection_id
-        else _default_kb_collection(user_id)
-    )
-    text = payload.content.strip()
-    checksum = sha256_bytes(text.encode("utf-8"))
-    duplicate = (
-        database()
-        .table("kb_documents")
-        .select("*")
-        .eq("collection_id", collection["id"])
-        .eq("checksum", checksum)
-        .limit(1)
-        .execute()
-    )
-    existing = _first(duplicate)
-    if existing:
-        return {**existing, "duplicate": True}
-    document = _store_kb_text_document(
-        user_id=user_id,
-        collection_id=collection["id"],
-        title=payload.title.strip(),
-        text=text,
-        source_type="note",
-        source_url=payload.source_url,
-        checksum=checksum,
-        metadata={"created_from": "editor"},
-    )
-    record_activity(
-        user_id,
-        "knowledge",
-        "新建知识笔记",
-        document["title"],
-        entity_type="kb_document",
-        entity_id=document["id"],
-        metadata={"chunks": document.get("chunk_count", 0)},
-    )
-    return document
-
-
-@router.delete("/knowledge/documents/{document_id}", status_code=204)
-def delete_knowledge_document(document_id: str, user=Depends(get_current_user)):
-    document_result = (
-        database()
-        .table("kb_documents")
-        .select("*")
-        .eq("id", document_id)
-        .limit(1)
-        .execute()
-    )
-    document = _first(document_result)
-    if not document:
-        raise HTTPException(status_code=404, detail="知识库文档不存在")
-    _require_writable_kb_collection(document["collection_id"], user)
-    storage_path = document.get("storage_path")
-    if storage_path:
-        try:
-            database().storage.from_("knowledge-base").remove([storage_path])
-        except Exception:
-            raise HTTPException(
-                status_code=409,
-                detail="原文件清理失败，文档尚未删除，请稍后重试",
-            ) from None
-    database().table("kb_documents").delete().eq("id", document_id).execute()
-    return Response(status_code=204)
+    return _public_knowledge_status()
 
 
 @router.post("/knowledge/search")
 def search_knowledge_base(
-    payload: KnowledgeSearchRequest,
+    payload: KnowledgeQueryRequest,
     user=Depends(get_current_user),
 ):
-    rows = _search_knowledge_base(
-        query=payload.query.strip(),
-        user_id=str(user.id),
-        collection_id=payload.collection_id,
-        top_k=payload.top_k,
-    )
-    retrieval_mode = (
-        "hybrid" if os.getenv("EMBEDDING_API_KEY") else "full-text"
-    )
-    retrieval_id = _record_kb_retrieval(
-        user_id=str(user.id),
-        query=payload.query.strip(),
-        rows=rows,
-        collection_id=payload.collection_id,
-        answer=None,
-        retrieval_mode=retrieval_mode,
+    query = payload.text
+    citations = _search_external_knowledge(query, top_n=payload.top_n)
+    record_activity(
+        str(user.id),
+        "knowledge",
+        "星火知识库检索",
+        query[:200],
+        metadata={
+            "provider": "xunfei-chatdoc",
+            "citation_count": len(citations),
+        },
     )
     return {
-        "query": payload.query,
-        "items": rows,
-        "total": len(rows),
-        "retrieval": retrieval_mode,
-        "retrieval_id": retrieval_id,
+        "query": query,
+        "citations": citations,
+        "total": len(citations),
+        "provider": "xunfei-chatdoc",
     }
 
 
 @router.post("/knowledge/answer")
+@router.post("/knowledge/xunfei/answer")
 def answer_from_knowledge_base(
-    payload: KnowledgeAnswerRequest,
+    payload: KnowledgeQueryRequest,
     user=Depends(get_current_user),
 ):
-    rows = _search_knowledge_base(
-        query=payload.query.strip(),
-        user_id=str(user.id),
-        collection_id=payload.collection_id,
-        top_k=payload.top_k,
-    )
-    citations = [
-        {
-            "index": index,
-            "document_id": row.get("document_id"),
-            "chunk_id": row.get("chunk_id"),
-            "title": row.get("document_title") or row.get("title") or "未命名文档",
-            "chunk_index": row.get("chunk_index"),
-            "source_url": row.get("source_url"),
-            "file_name": row.get("file_name"),
-            "score": row.get("score"),
-            "excerpt": (row.get("content") or "")[:500],
-        }
-        for index, row in enumerate(rows, start=1)
-    ]
-    if not rows:
-        retrieval_id = _record_kb_retrieval(
-            user_id=str(user.id),
-            query=payload.query.strip(),
-            rows=[],
-            collection_id=payload.collection_id,
-            answer="当前知识库没有检索到足以回答该问题的内容。",
-            retrieval_mode=(
-                "hybrid" if os.getenv("EMBEDDING_API_KEY") else "full-text"
+    query = payload.text
+    citations = _search_external_knowledge(query, top_n=payload.top_n)
+    status = model_service_status()
+    model = status.get("model") if status.get("available") else None
+    if citations and status.get("available"):
+        answer = _call_maas(
+            [{"role": "user", "content": query}],
+            system_prompt=_knowledge_system_prompt(
+                "你是 SciPilot 科研知识问答助手，回答应准确、简洁并可核验。",
+                citations,
+                knowledge_requested=True,
             ),
-        )
-        return {
-            "query": payload.query,
-            "answer": "当前知识库没有检索到足以回答该问题的内容。",
-            "citations": [],
-            "retrieval_id": retrieval_id,
-        }
-
-    if not payload.include_answer:
-        retrieval_id = _record_kb_retrieval(
-            user_id=str(user.id),
-            query=payload.query.strip(),
-            rows=rows,
-            collection_id=payload.collection_id,
-            answer=None,
-            retrieval_mode=(
-                "hybrid" if os.getenv("EMBEDDING_API_KEY") else "full-text"
-            ),
-        )
-        return {
-            "query": payload.query,
-            "answer": None,
-            "citations": citations,
-            "retrieval_id": retrieval_id,
-        }
-
-    if os.getenv("LLM_API_KEY"):
-        context = "\n\n".join(
-            f"[{index}] {row.get('document_title') or '未命名文档'}\n"
-            f"{(row.get('content') or '')[:1800]}"
-            for index, row in enumerate(rows[:12], start=1)
-        )
-        answer = call_default_llm(
-            system_prompt=(
-                "你是科研知识库问答助手。只能依据给定资料回答；"
-                "每个实质性结论必须使用 [数字] 标注来源。"
-                "资料不足时明确说明，不得编造引用。"
-            ),
-            user_message=f"问题：{payload.query}\n\n检索资料：\n{context}",
-        )
-        valid_citation_indexes = set(range(1, len(citations) + 1))
-        answer = re.sub(
-            r"\[(\d+)\]",
-            lambda match: (
-                match.group(0)
-                if int(match.group(1)) in valid_citation_indexes
-                else "[来源未验证]"
-            ),
-            answer,
         )
     else:
-        answer = (
-            "尚未配置问答模型，以下是知识库中最相关的检索片段：\n\n"
-            + "\n\n".join(
-                f"[{item['index']}] {item['title']}：{item['excerpt']}"
-                for item in citations[:5]
-            )
-        )
+        answer = _evidence_only_answer(citations)
     record_activity(
         str(user.id),
         "knowledge",
-        "知识库问答",
-        payload.query[:200],
-        metadata={"citation_count": len(citations)},
-    )
-    retrieval_id = _record_kb_retrieval(
-        user_id=str(user.id),
-        query=payload.query.strip(),
-        rows=rows,
-        collection_id=payload.collection_id,
-        answer=answer,
-        retrieval_mode=(
-            "hybrid" if os.getenv("EMBEDDING_API_KEY") else "full-text"
-        ),
+        "星火知识库问答",
+        query[:200],
+        metadata={
+            "provider": "xunfei-chatdoc",
+            "citation_count": len(citations),
+            "model": model,
+        },
     )
     return {
-        "query": payload.query,
+        "query": query,
         "answer": answer,
         "citations": citations,
-        "retrieval_id": retrieval_id,
+        "total": len(citations),
+        "provider": "xunfei-chatdoc",
+        "model": model,
+    }
+
+
+@router.get("/dashboard/chat/status")
+def dashboard_chat_status(user=Depends(get_current_user)):
+    status = dict(model_service_status())
+    # Keep the model control path independent from a slow ChatDoc repository.
+    # The dedicated /knowledge/status endpoint performs the remote readiness
+    # check; dashboard messages degrade safely if retrieval later fails.
+    status["knowledge_available"] = is_xunfei_knowledge_base_configured()
+    return status
+
+
+@router.post("/dashboard/chat")
+def dashboard_chat(
+    payload: DashboardChatRequest,
+    user=Depends(get_current_user),
+):
+    history = [
+        {"role": item.role, "content": item.content.strip()}
+        for item in payload.messages
+    ]
+    query = history[-1]["content"]
+    knowledge_unavailable = False
+    citations: list[dict[str, Any]] = []
+    if payload.use_knowledge_base:
+        try:
+            citations = _search_external_knowledge(query, top_n=6)
+        except HTTPException as exc:
+            if exc.status_code != 502:
+                raise
+            # ChatDoc is an enhancement, not a prerequisite for MaaS chat.
+            knowledge_unavailable = True
+    status = model_service_status()
+    if not status.get("available"):
+        raise _upstream_error("对话模型")
+    reply = _call_maas(
+        history,
+        system_prompt=_knowledge_system_prompt(
+            (
+                "你是 SciPilot 科研对话助手。请结合完整对话历史理解用户意图，"
+                "使用清晰、严谨、适合科研工作的中文作答。"
+            ),
+            citations,
+            knowledge_requested=payload.use_knowledge_base
+            and not knowledge_unavailable,
+        ),
+    )
+    record_activity(
+        str(user.id),
+        "dashboard",
+        "模型对话",
+        query[:200],
+        metadata={
+            "provider": "xunfei-maas",
+            "knowledge_used": bool(citations),
+            "citation_count": len(citations),
+        },
+    )
+    return {
+        "reply": reply,
+        "citations": citations,
+        "model": status.get("model"),
+        "knowledge_used": bool(citations),
+        "knowledge_unavailable": knowledge_unavailable,
     }
 
 

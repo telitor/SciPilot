@@ -13,6 +13,7 @@ import { dashboardAPI } from '@/services/api';
 import { usePaperStore } from '@/store/paperStore';
 import type { Paper } from '@/types';
 import ResearchLauncher from '@/components/ResearchLauncher';
+import DashboardModelChat from '@/features/model-chat';
 
 interface DashboardSummary {
   stats: {
@@ -171,6 +172,8 @@ function Dashboard() {
           ))}
         </div>
       </div>
+
+      <DashboardModelChat />
     </div>
   );
 }

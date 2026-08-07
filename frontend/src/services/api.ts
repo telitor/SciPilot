@@ -5,11 +5,12 @@ import { getApiErrorMessage } from '@/services/errors';
 import type {
   AgentKnowledgeAnswerResponse,
   AgentKnowledgeAskRequest,
+  DashboardChatResponse,
+  DashboardChatStatus,
   KnowledgeBaseStatus,
   KnowledgeAnswerResponse,
-  KnowledgeCollection,
-  KnowledgeDocument,
   KnowledgeSearchResponse,
+  ModelChatMessage,
   PublicAgent,
 } from '@/types';
 
@@ -157,67 +158,24 @@ export const kgAPI = {
   searchNodes: (query: string) => apiClient.get('/kg/search', { params: { q: query } }),
 };
 
-// ---- Knowledge Base ----
+// ---- External Spark Knowledge Base ----
 export const knowledgeAPI = {
   getStatus: () =>
     apiClient.get<KnowledgeBaseStatus>('/knowledge/status'),
 
-  getCollections: () =>
-    apiClient.get<{ items: KnowledgeCollection[]; total: number }>('/knowledge/collections'),
+  search: (data: { query: string; top_n?: number }) =>
+    apiClient.post<KnowledgeSearchResponse>('/knowledge/search', data, { timeout: 120000 }),
 
-  createCollection: (data: { name: string; description?: string; is_public?: boolean }) =>
-    apiClient.post<KnowledgeCollection>('/knowledge/collections', data),
+  answer: (data: { query: string; top_n?: number }) =>
+    apiClient.post<KnowledgeAnswerResponse>('/knowledge/answer', data, { timeout: 120000 }),
+};
 
-  getDocuments: (params?: { collection_id?: string; page?: number; limit?: number }) =>
-    apiClient.get<{ items: KnowledgeDocument[]; page: number; limit: number; total: number }>(
-      '/knowledge/documents',
-      { params }
-    ),
+// ---- Dashboard published-model chat ----
+export const dashboardChatAPI = {
+  getStatus: () => apiClient.get<DashboardChatStatus>('/dashboard/chat/status'),
 
-  getDocument: (id: string, params?: { page?: number; limit?: number }) =>
-    apiClient.get<KnowledgeDocument>(`/knowledge/documents/${id}`, { params }),
-
-  upload: (
-    file: File,
-    options?: {
-      collection_id?: string;
-      title?: string;
-      onProgress?: (progress: number) => void;
-    }
-  ) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    if (options?.collection_id) formData.append('collection_id', options.collection_id);
-    if (options?.title?.trim()) formData.append('title', options.title.trim());
-    return apiClient.post<KnowledgeDocument>('/knowledge/documents/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      onUploadProgress: (progressEvent) => {
-        if (options?.onProgress && progressEvent.total) {
-          options.onProgress(Math.round((progressEvent.loaded * 100) / progressEvent.total));
-        }
-      },
-    });
-  },
-
-  addText: (data: {
-    title: string;
-    content: string;
-    collection_id?: string;
-    source_url?: string;
-  }) => apiClient.post<KnowledgeDocument>('/knowledge/documents/text', data),
-
-  deleteDocument: (id: string) =>
-    apiClient.delete(`/knowledge/documents/${id}`),
-
-  search: (data: { query: string; collection_id?: string; top_k?: number }) =>
-    apiClient.post<KnowledgeSearchResponse>('/knowledge/search', data),
-
-  answer: (data: {
-    query: string;
-    collection_id?: string;
-    top_k?: number;
-    include_answer?: boolean;
-  }) => apiClient.post<KnowledgeAnswerResponse>('/knowledge/answer', data),
+  send: (data: { messages: ModelChatMessage[]; use_knowledge_base: boolean }) =>
+    apiClient.post<DashboardChatResponse>('/dashboard/chat', data, { timeout: 120000 }),
 };
 
 // ---- Knowledge-enabled Agents ----

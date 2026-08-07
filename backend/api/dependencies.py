@@ -1,4 +1,9 @@
+import hashlib
+import hmac
 import logging
+import os
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import Header, HTTPException
@@ -6,6 +11,63 @@ from fastapi import Header, HTTPException
 from services.supabase_service import get_supabase_client
 
 logger = logging.getLogger(__name__)
+
+LOCAL_DEMO_USER_ID = "00000000-0000-4000-8000-000000000001"
+
+
+def local_demo_mode_enabled() -> bool:
+    """Enable demo auth only when both flags explicitly select a local runtime."""
+
+    requested = os.getenv("LOCAL_DEMO_MODE", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    runtime = os.getenv("SCIPILOT_ENV", "production").strip().lower()
+    return requested and runtime == "local"
+
+
+def local_demo_user() -> SimpleNamespace:
+    email = os.getenv("LOCAL_DEMO_EMAIL", "demo@scipilot.local").strip().lower()
+    username = os.getenv("LOCAL_DEMO_USERNAME", "本地验收用户").strip()
+    return SimpleNamespace(
+        id=LOCAL_DEMO_USER_ID,
+        email=email,
+        user_metadata={"username": username, "role": "user"},
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def local_demo_login(email: str, password: str) -> SimpleNamespace | None:
+    """Authenticate the isolated demo account without weakening production auth."""
+
+    if not local_demo_mode_enabled():
+        return None
+    expected_email = os.getenv(
+        "LOCAL_DEMO_EMAIL", "demo@scipilot.local"
+    ).strip().lower()
+    expected_password = os.getenv("LOCAL_DEMO_PASSWORD", "")
+    if not expected_password:
+        return None
+    if email.strip().lower() != expected_email or password != expected_password:
+        return None
+    return local_demo_user()
+
+
+def local_demo_token() -> str | None:
+    """Derive a bearer value from the uncommitted demo password."""
+
+    if not local_demo_mode_enabled():
+        return None
+    email = os.getenv("LOCAL_DEMO_EMAIL", "demo@scipilot.local").strip().lower()
+    password = os.getenv("LOCAL_DEMO_PASSWORD", "")
+    if not password:
+        return None
+    digest = hashlib.sha256(
+        f"SciPilot local demo\0{email}\0{password}".encode("utf-8")
+    ).hexdigest()
+    return f"local-demo-{digest}"
 
 
 def database():
@@ -19,6 +81,10 @@ def get_current_user(authorization: str | None = Header(default=None)):
     token = authorization.removeprefix("Bearer ").strip()
     if not token:
         raise HTTPException(status_code=401, detail="登录凭证无效")
+
+    expected_demo_token = local_demo_token()
+    if expected_demo_token and hmac.compare_digest(token, expected_demo_token):
+        return local_demo_user()
 
     try:
         response = database().auth.get_user(token)
@@ -57,6 +123,18 @@ def format_user(user: Any, profile: dict[str, Any] | None = None) -> dict[str, A
 
 def get_or_create_profile(user: Any) -> dict[str, Any]:
     user_id = str(user.id)
+    if local_demo_mode_enabled() and user_id == LOCAL_DEMO_USER_ID:
+        formatted = format_user(user)
+        return {
+            "id": formatted["id"],
+            "email": formatted["email"],
+            "username": formatted["username"],
+            "avatar_url": None,
+            "bio": "仅用于本机验收，不连接 Supabase。",
+            "preferences": {},
+            "role": "user",
+            "created_at": formatted["created_at"],
+        }
     try:
         result = (
             database()
@@ -136,6 +214,9 @@ def record_activity(
     metadata: dict[str, Any] | None = None,
 ) -> None:
     """Record activity without making the primary operation fail."""
+
+    if local_demo_mode_enabled() and user_id == LOCAL_DEMO_USER_ID:
+        return
 
     try:
         database().table("activities").insert(
