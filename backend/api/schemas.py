@@ -81,6 +81,7 @@ class ChatMessageRequest(BaseModel):
 class DashboardChatRequest(BaseModel):
     messages: list[ChatMessageRequest] = Field(min_length=1, max_length=20)
     use_knowledge_base: bool = True
+    conversation_id: Optional[str] = Field(default=None, min_length=1, max_length=100)
 
     @model_validator(mode="after")
     def validate_history(self):

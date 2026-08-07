@@ -50,12 +50,19 @@ export const useUIStore = create<UIState>()(
       },
 
       addNotification: (notification) =>
-        set((state) => ({
-          notifications: [
-            ...state.notifications,
-            { ...notification, id: Math.random().toString(36).substring(7) },
-          ],
-        })),
+        set((state) => {
+          const duplicate = state.notifications.some(
+            (item) =>
+              item.type === notification.type && item.message === notification.message
+          );
+          if (duplicate) return state;
+          return {
+            notifications: [
+              ...state.notifications,
+              { ...notification, id: Math.random().toString(36).substring(7) },
+            ],
+          };
+        }),
 
       removeNotification: (id) =>
         set((state) => ({

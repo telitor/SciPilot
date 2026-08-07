@@ -1,7 +1,5 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { useAuthStore } from '@/store/authStore';
-import { useUIStore } from '@/store/uiStore';
-import { getApiErrorMessage } from '@/services/errors';
 import type {
   AgentKnowledgeAnswerResponse,
   AgentKnowledgeAskRequest,
@@ -43,14 +41,6 @@ apiClient.interceptors.response.use(
     if (error.response?.status === 401 && !isAuthRequest) {
       useAuthStore.getState().logout();
       window.location.href = '/login';
-    }
-    const message = getApiErrorMessage(error);
-    if (!isAuthRequest) {
-      useUIStore.getState().addNotification({
-        type: 'error',
-        message,
-        duration: 5000,
-      });
     }
     return Promise.reject(error);
   }
@@ -174,7 +164,11 @@ export const knowledgeAPI = {
 export const dashboardChatAPI = {
   getStatus: () => apiClient.get<DashboardChatStatus>('/dashboard/chat/status'),
 
-  send: (data: { messages: ModelChatMessage[]; use_knowledge_base: boolean }) =>
+  send: (data: {
+    messages: ModelChatMessage[];
+    use_knowledge_base: boolean;
+    conversation_id?: string | null;
+  }) =>
     apiClient.post<DashboardChatResponse>('/dashboard/chat', data, { timeout: 120000 }),
 };
 

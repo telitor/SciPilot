@@ -15,7 +15,9 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { dashboardChatAPI } from '@/services/api';
+import { isAxiosError } from 'axios';
+import { conversationAPI, dashboardChatAPI } from '@/services/api';
+import { getApiErrorMessage } from '@/services/errors';
 import { useAuthStore } from '@/store/authStore';
 import type { DashboardChatStatus, KnowledgeCitation, ModelChatMessage } from '@/types';
 import './model-chat.css';
@@ -24,6 +26,7 @@ interface ViewMessage extends ModelChatMessage {
   id: string;
   citations?: KnowledgeCitation[];
   knowledgeUnavailable?: boolean;
+  persistenceUnavailable?: boolean;
   synthetic?: boolean;
 }
 
@@ -58,22 +61,19 @@ function readStoredMessages(key: string): ViewMessage[] {
   }
 }
 
-function getErrorMessage(error: unknown) {
-  if (typeof error === 'object' && error !== null && 'response' in error) {
-    const response = (error as { response?: { data?: { detail?: string } } }).response;
-    if (response?.data?.detail) return response.data.detail;
-  }
-  return '模型暂时没有响应，请稍后重试。';
-}
-
 function DashboardModelChat() {
   const userId = useAuthStore((state) => state.user?.id || 'anonymous');
   const storageKey = `scipilot-dashboard-chat:${userId}`;
+  const conversationStorageKey = `${storageKey}:conversation-id`;
   const [open, setOpen] = useState(() => localStorage.getItem('scipilot-dashboard-chat-open') !== 'false');
   const [messages, setMessages] = useState<ViewMessage[]>(() => readStoredMessages(storageKey));
+  const [conversationId, setConversationId] = useState<string | null>(
+    () => localStorage.getItem(conversationStorageKey)
+  );
   const [status, setStatus] = useState<DashboardChatStatus | null>(null);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [error, setError] = useState('');
   const [useKnowledgeBase, setUseKnowledgeBase] = useState(true);
   const logRef = useRef<HTMLDivElement>(null);
@@ -94,6 +94,51 @@ function DashboardModelChat() {
   }, [loadStatus]);
 
   useEffect(() => {
+    setMessages(readStoredMessages(storageKey));
+    setConversationId(localStorage.getItem(conversationStorageKey));
+    setError('');
+  }, [conversationStorageKey, storageKey]);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    let cancelled = false;
+    const restoreConversation = async () => {
+      try {
+        const response = await conversationAPI.getConversation(conversationId);
+        const restored = (response.data.messages || [])
+          .filter(
+            (item: { role?: string; content?: unknown }) =>
+              ['user', 'assistant'].includes(item.role || '') &&
+              typeof item.content === 'string'
+          )
+          .map((item: {
+            id?: string;
+            role: 'user' | 'assistant';
+            content: string;
+            citations?: KnowledgeCitation[];
+          }) => ({
+            id: item.id || createId(),
+            role: item.role,
+            content: item.content,
+            citations: item.citations,
+          }));
+        if (!cancelled && restored.length) {
+          setMessages([WELCOME_MESSAGE, ...restored].slice(-20));
+        }
+      } catch (restoreError) {
+        if (isAxiosError(restoreError) && restoreError.response?.status === 404) {
+          localStorage.removeItem(conversationStorageKey);
+          if (!cancelled) setConversationId(null);
+        }
+      }
+    };
+    void restoreConversation();
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, conversationStorageKey]);
+
+  useEffect(() => {
     localStorage.setItem('scipilot-dashboard-chat-open', String(open));
     if (open) window.setTimeout(() => inputRef.current?.focus(), 160);
   }, [open]);
@@ -101,6 +146,14 @@ function DashboardModelChat() {
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify(messages.slice(-20)));
   }, [messages, storageKey]);
+
+  useEffect(() => {
+    if (conversationId) {
+      localStorage.setItem(conversationStorageKey, conversationId);
+    } else {
+      localStorage.removeItem(conversationStorageKey);
+    }
+  }, [conversationId, conversationStorageKey]);
 
   useEffect(() => {
     const element = logRef.current;
@@ -130,20 +183,25 @@ function DashboardModelChat() {
       const response = await dashboardChatAPI.send({
         messages: history.slice(-20),
         use_knowledge_base: useKnowledgeBase,
+        conversation_id: conversationId,
       });
+      if (response.data.conversation_id) {
+        setConversationId(response.data.conversation_id);
+      }
       const assistantMessage: ViewMessage = {
         id: createId(),
         role: 'assistant',
         content: response.data.reply,
         citations: response.data.citations,
         knowledgeUnavailable: response.data.knowledge_unavailable,
+        persistenceUnavailable: response.data.persistence_unavailable,
       };
       setMessages((current) => [
         ...current,
         assistantMessage,
       ].slice(-20));
     } catch (requestError) {
-      setError(getErrorMessage(requestError));
+      setError(getApiErrorMessage(requestError, '模型暂时没有响应，请稍后重试。'));
     } finally {
       setSending(false);
     }
@@ -171,11 +229,20 @@ function DashboardModelChat() {
     }
   };
 
-  const clearConversation = () => {
-    if (sending) return;
-    setMessages([WELCOME_MESSAGE]);
-    setError('');
-    setInput('');
+  const clearConversation = async () => {
+    if (sending || clearing) return;
+    setClearing(true);
+    try {
+      if (conversationId) await conversationAPI.deleteConversation(conversationId);
+      setConversationId(null);
+      setMessages([WELCOME_MESSAGE]);
+      setError('');
+      setInput('');
+    } catch (clearError) {
+      setError(getApiErrorMessage(clearError, '清空对话失败，请稍后重试。'));
+    } finally {
+      setClearing(false);
+    }
   };
 
   const retry = () => {
@@ -221,7 +288,7 @@ function DashboardModelChat() {
           </div>
         </div>
         <div className="model-chat__header-actions">
-          <button type="button" onClick={clearConversation} disabled={sending} aria-label="清空对话" title="清空对话">
+          <button type="button" onClick={() => void clearConversation()} disabled={sending || clearing} aria-label="清空对话" title="清空对话">
             <Trash2 size={15} />
           </button>
           <button type="button" onClick={() => setOpen(false)} aria-label="最小化对话" title="最小化">
@@ -270,6 +337,11 @@ function DashboardModelChat() {
               {message.knowledgeUnavailable && (
                 <div className="model-chat__degraded" role="status">
                   论文增强本轮不可用，已自动切换为纯模型回答
+                </div>
+              )}
+              {message.persistenceUnavailable && (
+                <div className="model-chat__degraded" role="status">
+                  本轮回答未能保存到历史记录，请检查 Supabase 连接
                 </div>
               )}
             </div>

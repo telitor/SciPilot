@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -22,6 +23,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
+from supabase_auth.errors import AuthApiError, AuthRetryableError, AuthUnknownError
 
 from api.dependencies import (
     database,
@@ -62,6 +64,7 @@ from services.xunfei_knowledge_base_service import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 PAPER_COLUMNS = (
     "id,title,authors,abstract,source_url,arxiv_id,doi,file_name,mime_type,"
@@ -90,6 +93,29 @@ def _safe_filename(filename: str) -> str:
 
 def _auth_error() -> HTTPException:
     return HTTPException(status_code=401, detail="邮箱或密码不正确")
+
+
+def _supabase_auth_exception(exc: Exception) -> HTTPException:
+    """Translate Supabase auth failures without disguising outages as bad passwords."""
+
+    if isinstance(exc, AuthApiError):
+        if exc.code == "email_not_confirmed":
+            return HTTPException(status_code=403, detail="请先完成邮箱验证后再登录")
+        if exc.code in {"invalid_credentials", "user_not_found"}:
+            return _auth_error()
+        if exc.code == "user_banned":
+            return HTTPException(status_code=403, detail="该账号当前无法登录，请联系管理员")
+        if exc.status == 429:
+            return HTTPException(status_code=429, detail="登录请求过于频繁，请稍后再试")
+
+    if isinstance(exc, (AuthRetryableError, AuthUnknownError)):
+        logger.warning("Supabase login service unavailable: %s", type(exc).__name__)
+    else:
+        logger.warning("Unexpected Supabase login failure: %s", type(exc).__name__)
+    return HTTPException(
+        status_code=503,
+        detail="Supabase 登录服务暂不可用，请检查项目地址、网络和 API Key 配置",
+    )
 
 
 def _extract_pdf_metadata(content: bytes, fallback_title: str) -> dict[str, Any]:
@@ -555,10 +581,7 @@ def login(payload: LoginRequest):
             {"email": payload.email.strip().lower(), "password": payload.password}
         )
     except Exception as exc:
-        message = str(exc).lower()
-        if "email not confirmed" in message:
-            raise HTTPException(status_code=403, detail="请先完成邮箱验证后再登录") from None
-        raise _auth_error() from None
+        raise _supabase_auth_exception(exc) from None
     if not response.user or not response.session:
         raise _auth_error()
     profile = get_or_create_profile(response.user)
@@ -1137,16 +1160,136 @@ def dashboard_chat_status(user=Depends(get_current_user)):
     return status
 
 
+def _persist_dashboard_exchange(
+    *,
+    user_id: str,
+    conversation_id: str | None,
+    query: str,
+    reply: str,
+    citations: list[dict[str, Any]],
+    model: str | None,
+    knowledge_used: bool,
+) -> tuple[str | None, bool]:
+    """Persist one completed exchange; local demo mode remains database-free."""
+
+    if local_demo_mode_enabled():
+        return None, False
+
+    created_conversation = False
+    try:
+        if conversation_id:
+            conversation = require_owned_row(
+                "conversations", conversation_id, user_id
+            )
+            if conversation.get("module") != "dashboard-chat":
+                raise HTTPException(status_code=400, detail="对话类型不匹配")
+        else:
+            created = (
+                database()
+                .table("conversations")
+                .insert(
+                    {
+                        "user_id": user_id,
+                        "agent_id": None,
+                        "title": query[:60] or "SciPilot AI 对话",
+                        "module": "dashboard-chat",
+                    }
+                )
+                .execute()
+            )
+            conversation = _first(created)
+            if not conversation:
+                return None, True
+            conversation_id = str(conversation["id"])
+            created_conversation = True
+
+        saved = (
+            database()
+            .table("messages")
+            .insert(
+                [
+                    {
+                        "conversation_id": conversation_id,
+                        "user_id": user_id,
+                        "agent_id": None,
+                        "role": "user",
+                        "content": query,
+                    },
+                    {
+                        "conversation_id": conversation_id,
+                        "user_id": user_id,
+                        "agent_id": None,
+                        "role": "assistant",
+                        "content": reply,
+                        "citations": citations,
+                        "model": model,
+                        "metadata": {
+                            "knowledge_used": knowledge_used,
+                            "response_mode": "dashboard-model-chat",
+                        },
+                    },
+                ]
+            )
+            .execute()
+        )
+        if len(saved.data or []) != 2:
+            raise RuntimeError("message persistence incomplete")
+        database().table("conversations").update(
+            {"updated_at": datetime.now(timezone.utc).isoformat()}
+        ).eq("id", conversation_id).eq("user_id", user_id).execute()
+        return conversation_id, False
+    except HTTPException:
+        raise
+    except Exception:
+        if created_conversation and conversation_id:
+            try:
+                database().table("conversations").delete().eq(
+                    "id", conversation_id
+                ).eq("user_id", user_id).execute()
+            except Exception:
+                pass
+        return conversation_id, True
+
+
 @router.post("/dashboard/chat")
 def dashboard_chat(
     payload: DashboardChatRequest,
     user=Depends(get_current_user),
 ):
-    history = [
+    submitted_history = [
         {"role": item.role, "content": item.content.strip()}
         for item in payload.messages
     ]
-    query = history[-1]["content"]
+    query = submitted_history[-1]["content"]
+    history = submitted_history
+    if payload.conversation_id and not local_demo_mode_enabled():
+        conversation = require_owned_row(
+            "conversations", payload.conversation_id, str(user.id)
+        )
+        if conversation.get("module") != "dashboard-chat":
+            raise HTTPException(status_code=400, detail="对话类型不匹配")
+        history_result = (
+            database()
+            .table("messages")
+            .select("role,content,created_at")
+            .eq("conversation_id", payload.conversation_id)
+            .eq("user_id", str(user.id))
+            .order("created_at", desc=True)
+            .limit(19)
+            .execute()
+        )
+        remaining_chars = max(0, 50_000 - len(query))
+        prior_history: list[dict[str, str]] = []
+        for item in history_result.data or []:
+            role = str(item.get("role") or "")
+            content = str(item.get("content") or "").strip()
+            if role not in {"user", "assistant"} or not content:
+                continue
+            if len(content) > remaining_chars:
+                break
+            prior_history.append({"role": role, "content": content})
+            remaining_chars -= len(content)
+        history = [*reversed(prior_history), {"role": "user", "content": query}]
     knowledge_unavailable = False
     citations: list[dict[str, Any]] = []
     if payload.use_knowledge_base:
@@ -1172,6 +1315,15 @@ def dashboard_chat(
             and not knowledge_unavailable,
         ),
     )
+    conversation_id, persistence_unavailable = _persist_dashboard_exchange(
+        user_id=str(user.id),
+        conversation_id=payload.conversation_id,
+        query=query,
+        reply=reply,
+        citations=citations,
+        model=status.get("model"),
+        knowledge_used=bool(citations),
+    )
     record_activity(
         str(user.id),
         "dashboard",
@@ -1189,6 +1341,8 @@ def dashboard_chat(
         "model": status.get("model"),
         "knowledge_used": bool(citations),
         "knowledge_unavailable": knowledge_unavailable,
+        "conversation_id": conversation_id,
+        "persistence_unavailable": persistence_unavailable,
     }
 
 

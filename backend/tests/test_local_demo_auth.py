@@ -84,7 +84,8 @@ class LocalDemoAuthTests(unittest.TestCase):
                     )
                 )
 
-        self.assertEqual(error.exception.status_code, 401)
+        self.assertEqual(error.exception.status_code, 503)
+        self.assertIn("Supabase 登录服务暂不可用", error.exception.detail)
 
 
 if __name__ == "__main__":

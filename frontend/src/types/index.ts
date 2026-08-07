@@ -298,6 +298,8 @@ export interface DashboardChatResponse {
   model?: string | null;
   knowledge_used: boolean;
   knowledge_unavailable?: boolean;
+  conversation_id?: string | null;
+  persistence_unavailable?: boolean;
 }
 
 // ==================== UI Types ====================

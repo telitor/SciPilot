@@ -42,6 +42,22 @@ if errorlevel 1 (
   exit /b 1
 )
 
+"%PYTHON_EXE%" "%BACKEND_DIR%\scripts\check_runtime_config.py"
+if errorlevel 1 (
+  echo.
+  pause
+  exit /b 1
+)
+
+set "BACKEND_PORT_PID="
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":8000 .*LISTENING"') do set "BACKEND_PORT_PID=%%P"
+if defined BACKEND_PORT_PID (
+  echo [错误] 端口 8000 已被进程 PID %BACKEND_PORT_PID% 占用。
+  echo 这通常表示旧版 SciPilot 后端仍在运行。请先关闭旧后端，再重新双击启动。
+  pause
+  exit /b 1
+)
+
 echo 正在启动 SciPilot 后端：http://127.0.0.1:8000/
 start "SciPilot Backend" /min "%PYTHON_EXE%" -m uvicorn main:app --app-dir "%BACKEND_DIR%" --host 127.0.0.1 --port 8000
 

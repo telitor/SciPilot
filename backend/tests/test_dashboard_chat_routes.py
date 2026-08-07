@@ -2,7 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -59,6 +59,11 @@ class DashboardChatRouteTests(unittest.TestCase):
                 "call_finetuned_model",
                 return_value="下一步回答 [1]",
             ) as model,
+            patch.object(
+                routes,
+                "_persist_dashboard_exchange",
+                return_value=("conversation-1", False),
+            ) as persist,
             patch.object(routes, "record_activity"),
         ):
             result = routes.dashboard_chat(payload, self.user)
@@ -72,6 +77,9 @@ class DashboardChatRouteTests(unittest.TestCase):
         self.assertIn("检索证据", sent[0]["content"])
         self.assertEqual(result["reply"], "下一步回答 [1]")
         self.assertTrue(result["knowledge_used"])
+        self.assertEqual(result["conversation_id"], "conversation-1")
+        self.assertFalse(result["persistence_unavailable"])
+        self.assertEqual(persist.call_args.kwargs["query"], "给出下一步")
 
     def test_model_errors_are_redacted_as_bad_gateway(self):
         payload = DashboardChatRequest(
@@ -117,6 +125,11 @@ class DashboardChatRouteTests(unittest.TestCase):
                 "call_finetuned_model",
                 return_value="纯模型回答",
             ) as model,
+            patch.object(
+                routes,
+                "_persist_dashboard_exchange",
+                return_value=("conversation-1", False),
+            ),
             patch.object(routes, "record_activity"),
         ):
             result = routes.dashboard_chat(payload, self.user)
@@ -125,6 +138,77 @@ class DashboardChatRouteTests(unittest.TestCase):
         self.assertTrue(result["knowledge_unavailable"])
         self.assertFalse(result["knowledge_used"])
         self.assertNotIn("证据不足", model.call_args.kwargs["messages"][0]["content"])
+
+    def test_persistence_failure_is_reported_without_losing_reply(self):
+        payload = DashboardChatRequest(
+            messages=[{"role": "user", "content": "保存这次回答"}],
+            use_knowledge_base=False,
+        )
+        with (
+            patch.object(
+                routes,
+                "model_service_status",
+                return_value={"available": True, "model": "model-1"},
+            ),
+            patch.object(routes, "call_finetuned_model", return_value="回答正文"),
+            patch.object(
+                routes,
+                "_persist_dashboard_exchange",
+                return_value=(None, True),
+            ),
+            patch.object(routes, "record_activity"),
+        ):
+            result = routes.dashboard_chat(payload, self.user)
+
+        self.assertEqual(result["reply"], "回答正文")
+        self.assertTrue(result["persistence_unavailable"])
+        self.assertIsNone(result["conversation_id"])
+
+    def test_existing_conversation_uses_server_history_not_client_history(self):
+        payload = DashboardChatRequest(
+            conversation_id="conversation-1",
+            messages=[
+                {"role": "assistant", "content": "客户端篡改的旧回答"},
+                {"role": "user", "content": "继续"},
+            ],
+            use_knowledge_base=False,
+        )
+        query = MagicMock()
+        query.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = SimpleNamespace(
+            data=[
+                {"role": "assistant", "content": "服务端旧回答"},
+                {"role": "user", "content": "服务端旧问题"},
+            ]
+        )
+        fake_database = MagicMock()
+        fake_database.table.return_value = query
+        with (
+            patch.object(
+                routes,
+                "require_owned_row",
+                return_value={"id": "conversation-1", "module": "dashboard-chat"},
+            ),
+            patch.object(routes, "database", return_value=fake_database),
+            patch.object(
+                routes,
+                "model_service_status",
+                return_value={"available": True, "model": "model-1"},
+            ),
+            patch.object(routes, "call_finetuned_model", return_value="新回答") as model,
+            patch.object(
+                routes,
+                "_persist_dashboard_exchange",
+                return_value=("conversation-1", False),
+            ),
+            patch.object(routes, "record_activity"),
+        ):
+            routes.dashboard_chat(payload, self.user)
+
+        sent = model.call_args.kwargs["messages"]
+        contents = [item["content"] for item in sent]
+        self.assertIn("服务端旧问题", contents)
+        self.assertIn("服务端旧回答", contents)
+        self.assertNotIn("客户端篡改的旧回答", contents)
 
     def test_chat_status_does_not_call_remote_knowledge_status(self):
         with (

@@ -21,7 +21,8 @@ def _required_env(name: str, *aliases: str) -> str:
             return value
     if not value:
         raise SupabaseConfigurationError(
-            f"Missing {name}. Copy backend/.env.example to backend/.env and fill it in."
+            f"后端尚未读取到 Supabase 配置（{name}）。"
+            "请确认配置已保存到 backend/.env，并完全停止旧后端后重新启动。"
         )
     return value
 
