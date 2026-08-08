@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { isAxiosError } from 'axios';
+import { useNavigate } from 'react-router-dom';
 import {
   Upload,
   Send,
@@ -11,6 +12,7 @@ import {
   RefreshCw,
   MessageSquarePlus,
   Trash2,
+  ArrowRight,
 } from 'lucide-react';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
 import ProjectContextBar from '@/components/ProjectContextBar';
@@ -125,6 +127,7 @@ function CitationCard({ citation, onClose }: { citation: Citation; onClose: () =
 }
 
 function PaperRead() {
+  const navigate = useNavigate();
   const selectedProjectId = useSelectedProjectId();
   const userId = useAuthStore((state) => state.user?.id || 'anonymous');
   const paperStorageKey = `scipilot-paper-read:${userId}${selectedProjectId ? `:${selectedProjectId}` : ''}:paper-id`;
@@ -763,15 +766,31 @@ function PaperRead() {
             <div className="sci-card-glow mb-6">
               <div className="flex items-start justify-between gap-4 mb-2">
                 <h1 className="text-2xl font-bold">{currentPaper.title}</h1>
-                <button
-                  type="button"
-                  onClick={resetPaper}
-                  disabled={isSending || isUploading}
-                  className="sci-btn-secondary flex-shrink-0"
-                >
-                  <RefreshCw size={16} />
-                  重新上传论文
-                </button>
+                <div className="flex flex-shrink-0 flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const params = new URLSearchParams({
+                        paperId: currentPaper.id,
+                        direction: `基于《${currentPaper.title}》提出可验证的研究问题`,
+                      });
+                      navigate(`/research/decompose?${params.toString()}`);
+                    }}
+                    className="sci-btn-primary"
+                  >
+                    拆解研究问题
+                    <ArrowRight size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={resetPaper}
+                    disabled={isSending || isUploading}
+                    className="sci-btn-secondary"
+                  >
+                    <RefreshCw size={16} />
+                    重新上传论文
+                  </button>
+                </div>
               </div>
               <div className="flex items-center gap-3">
                 <span className="sci-badge-info">PDF</span>

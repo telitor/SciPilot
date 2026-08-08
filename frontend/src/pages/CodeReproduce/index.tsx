@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Code2, Search, Folder, File, ChevronRight, ChevronDown, Copy, Check, Terminal, AlertCircle, Loader2 } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Code2, Search, Folder, File, ChevronRight, ChevronDown, Copy, Check, Terminal, AlertCircle, Loader2, ArrowRight, BarChart3 } from 'lucide-react';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
 import ProjectContextBar from '@/components/ProjectContextBar';
 import { codeAPI } from '@/services/api';
@@ -55,9 +56,14 @@ function FileTreeItem({ file, depth }: { file: RepoFile; depth: number }) {
 
 function CodeReproduce() {
   const selectedProjectId = useSelectedProjectId();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const linkedRoadmapId = searchParams.get('roadmapId');
+  const incomingRepoUrl = searchParams.get('repoUrl') || '';
   const userId = useAuthStore((state) => state.user?.id || 'anonymous');
   const storageKey = `scipilot-current-repository:${userId}${selectedProjectId ? `:${selectedProjectId}` : ''}`;
-  const [repoUrl, setRepoUrl] = useState('');
+  const sourceStorageKey = `${storageKey}:roadmap-id`;
+  const [repoUrl, setRepoUrl] = useState(incomingRepoUrl);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [reproduction, setReproduction] = useState<import('@/types').CodeReproduction | null>(null);
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
@@ -70,14 +76,25 @@ function CodeReproduce() {
     setReproduction(null);
     setDiagnosis('');
     const artifactId = localStorage.getItem(storageKey);
-    if (!artifactId) return;
+    const storedRoadmapId = localStorage.getItem(sourceStorageKey);
+    if (linkedRoadmapId && storedRoadmapId !== linkedRoadmapId) {
+      setRepoUrl(incomingRepoUrl);
+      return;
+    }
+    if (!artifactId) {
+      setRepoUrl(incomingRepoUrl);
+      return;
+    }
     codeAPI.getRepoAnalysis(artifactId)
       .then((response) => {
         setReproduction(response.data);
         setRepoUrl(response.data.repo_url);
       })
-      .catch(() => localStorage.removeItem(storageKey));
-  }, [storageKey]);
+      .catch(() => {
+        localStorage.removeItem(storageKey);
+        localStorage.removeItem(sourceStorageKey);
+      });
+  }, [incomingRepoUrl, linkedRoadmapId, sourceStorageKey, storageKey]);
 
   const handleAnalyze = async () => {
     if (!repoUrl.trim()) {
@@ -87,9 +104,17 @@ function CodeReproduce() {
     setIsAnalyzing(true);
     setDiagnosis('');
     try {
-      const response = await codeAPI.analyzeRepo(repoUrl.trim(), selectedProjectId);
+      const response = await codeAPI.analyzeRepo(
+        repoUrl.trim(),
+        selectedProjectId,
+        linkedRoadmapId,
+      );
       setReproduction(response.data);
-      if (response.data.id) localStorage.setItem(storageKey, response.data.id);
+      if (response.data.id) {
+        localStorage.setItem(storageKey, response.data.id);
+        if (linkedRoadmapId) localStorage.setItem(sourceStorageKey, linkedRoadmapId);
+        else localStorage.removeItem(sourceStorageKey);
+      }
       addNotification({ type: 'success', message: '仓库分析完成', duration: 3000 });
     } catch (error) {
       addNotification({
@@ -282,6 +307,29 @@ function CodeReproduce() {
                 <p className="text-sm text-sci-muted whitespace-pre-wrap leading-relaxed">{diagnosis}</p>
               </div>
             )}
+          </div>
+
+          <div className="flex flex-wrap justify-end gap-3 border-t border-sci-border pt-4">
+            <button
+              type="button"
+              onClick={() => navigate('/experiment/roadmap')}
+              className="sci-btn-secondary"
+            >
+              返回实验路线
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const params = new URLSearchParams();
+                if (reproduction.id) params.set('repoId', reproduction.id);
+                navigate(`/result/analyze${params.toString() ? `?${params.toString()}` : ''}`);
+              }}
+              className="sci-btn-primary"
+            >
+              <BarChart3 size={16} />
+              进入结果分析
+              <ArrowRight size={16} />
+            </button>
           </div>
         </div>
       )}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Clock, GitFork, Database, Wrench, CheckCircle2, Circle, Loader2, Download } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Clock, GitFork, Database, Wrench, CheckCircle2, Circle, Loader2, Download, ArrowRight, Code2 } from 'lucide-react';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
 import ProjectContextBar from '@/components/ProjectContextBar';
 import { experimentAPI } from '@/services/api';
@@ -12,10 +12,14 @@ import type { ExperimentRoadmap as ExperimentRoadmapData } from '@/types';
 
 function ExperimentRoadmap() {
   const selectedProjectId = useSelectedProjectId();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const linkedQuestionId = searchParams.get('questionId');
+  const incomingObjective = searchParams.get('objective') || '';
   const userId = useAuthStore((state) => state.user?.id || 'anonymous');
   const storageKey = `scipilot-current-roadmap:${userId}${selectedProjectId ? `:${selectedProjectId}` : ''}`;
-  const [objective, setObjective] = useState(searchParams.get('objective') || '');
+  const sourceStorageKey = `${storageKey}:question-id`;
+  const [objective, setObjective] = useState(incomingObjective);
   const [roadmap, setRoadmap] = useState<ExperimentRoadmapData | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const { addNotification } = useUIStore();
@@ -23,14 +27,25 @@ function ExperimentRoadmap() {
   useEffect(() => {
     setRoadmap(null);
     const artifactId = localStorage.getItem(storageKey);
-    if (!artifactId) return;
+    const storedQuestionId = localStorage.getItem(sourceStorageKey);
+    if (linkedQuestionId && storedQuestionId !== linkedQuestionId) {
+      setObjective(incomingObjective);
+      return;
+    }
+    if (!artifactId) {
+      setObjective(incomingObjective);
+      return;
+    }
     experimentAPI.getRoadmap(artifactId)
       .then((response) => {
         setRoadmap(response.data);
-        if (!searchParams.get('objective')) setObjective(response.data.objective);
+        if (!incomingObjective) setObjective(response.data.objective);
       })
-      .catch(() => localStorage.removeItem(storageKey));
-  }, [searchParams, storageKey]);
+      .catch(() => {
+        localStorage.removeItem(storageKey);
+        localStorage.removeItem(sourceStorageKey);
+      });
+  }, [incomingObjective, linkedQuestionId, sourceStorageKey, storageKey]);
 
   const handleGenerate = async () => {
     if (!objective.trim()) {
@@ -39,14 +54,18 @@ function ExperimentRoadmap() {
     }
     setIsGenerating(true);
     try {
-      const questionId = searchParams.get('questionId') || 'manual';
+      const questionId = linkedQuestionId || 'manual';
       const response = await experimentAPI.generateRoadmap(
         questionId,
         objective.trim(),
         selectedProjectId,
       );
       setRoadmap(response.data);
-      if (response.data.id) localStorage.setItem(storageKey, response.data.id);
+      if (response.data.id) {
+        localStorage.setItem(storageKey, response.data.id);
+        if (linkedQuestionId) localStorage.setItem(sourceStorageKey, linkedQuestionId);
+        else localStorage.removeItem(sourceStorageKey);
+      }
       addNotification({ type: 'success', message: '实验路线生成完成', duration: 3000 });
     } catch (error) {
       addNotification({
@@ -223,6 +242,35 @@ function ExperimentRoadmap() {
           </div>
         </div>
       </div>}
+
+      {roadmap && (
+        <div className="flex flex-wrap justify-end gap-3 border-t border-sci-border pt-4">
+          <button
+            type="button"
+            onClick={() => navigate('/research/decompose')}
+            className="sci-btn-secondary"
+          >
+            返回问题拆解
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const params = new URLSearchParams();
+              if (roadmap.id) params.set('roadmapId', roadmap.id);
+              const suggestedRepo = roadmap.baselines.find(
+                (baseline) => baseline.github_url?.startsWith('https://github.com/'),
+              )?.github_url;
+              if (suggestedRepo) params.set('repoUrl', suggestedRepo);
+              navigate(`/code/reproduce${params.size ? `?${params.toString()}` : ''}`);
+            }}
+            className="sci-btn-primary"
+          >
+            <Code2 size={16} />
+            进入代码复现
+            <ArrowRight size={16} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

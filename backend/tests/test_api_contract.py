@@ -110,6 +110,24 @@ class FrontendBackendContractTests(unittest.TestCase):
         responses = self.operation("/papers/upload-async", "post")["responses"]
         self.assertIn("202", responses)
 
+    def test_workflow_link_fields_are_optional_and_published(self):
+        json_links = {
+            "/research/decompose": "paper_id",
+            "/code/analyze-repo": "roadmap_id",
+        }
+        for path, field in json_links.items():
+            with self.subTest(path=path, field=field):
+                schema = self.request_schema(path)
+                self.assertIn(field, schema.get("properties", {}))
+                self.assertNotIn(field, schema.get("required", []))
+
+        result_schema = self.request_schema(
+            "/results/analyze",
+            content_type="multipart/form-data",
+        )
+        self.assertIn("repo_id", result_schema.get("properties", {}))
+        self.assertNotIn("repo_id", result_schema.get("required", []))
+
     def test_p0_response_contracts_publish_frontend_required_fields(self):
         expected_required = {
             ("/papers/upload-async", "post", "202"): {

@@ -129,10 +129,14 @@ export const paperAPI = {
 
 // ---- Research ----
 export const researchAPI = {
-  decompose: (direction: string, projectId?: string | null) =>
+  decompose: (direction: string, projectId?: string | null, paperId?: string | null) =>
     apiClient.post<ResearchTree>(
       '/research/decompose',
-      { direction, project_id: projectId || undefined },
+      {
+        direction,
+        project_id: projectId || undefined,
+        paper_id: paperId || undefined,
+      },
       { timeout: 150000 },
     ),
 
@@ -163,10 +167,14 @@ export const experimentAPI = {
 
 // ---- Code Reproduction ----
 export const codeAPI = {
-  analyzeRepo: (repoUrl: string, projectId?: string | null) =>
+  analyzeRepo: (repoUrl: string, projectId?: string | null, roadmapId?: string | null) =>
     apiClient.post<CodeReproduction>(
       '/code/analyze-repo',
-      { repo_url: repoUrl, project_id: projectId || undefined },
+      {
+        repo_url: repoUrl,
+        project_id: projectId || undefined,
+        roadmap_id: roadmapId || undefined,
+      },
       { timeout: 150000 },
     ),
 
@@ -182,11 +190,17 @@ export const codeAPI = {
 
 // ---- Result Analysis ----
 export const resultAPI = {
-  analyze: (file: File, config?: Record<string, unknown>, projectId?: string | null) => {
+  analyze: (
+    file: File,
+    config?: Record<string, unknown>,
+    projectId?: string | null,
+    repoId?: string | null,
+  ) => {
     const formData = new FormData();
     formData.append('file', file);
     if (config) formData.append('config', JSON.stringify(config));
     if (projectId) formData.append('project_id', projectId);
+    if (repoId) formData.append('repo_id', repoId);
     return apiClient.post<ResultAnalysis>('/results/analyze', formData, { timeout: 150000 });
   },
 

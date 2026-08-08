@@ -1,9 +1,11 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
 
 from api import routes
+from api.schemas import ExperimentRoadmapRequest
 from services import xunfei_agent_service
 
 
@@ -67,6 +69,44 @@ class StructuredAgentResultTests(unittest.TestCase):
         src = next(item for item in result if item["name"] == "src")
         self.assertEqual(src["children"][0]["path"], "src/main.py")
         self.assertEqual(src["children"][0]["size"], 120)
+
+    def test_artifact_context_excerpt_keeps_workflow_facts(self):
+        excerpt = routes._artifact_context_excerpt(
+            {
+                "artifact_type": "experiment-roadmap",
+                "title": "缺陷预测实验",
+                "content": {
+                    "objective": "比较不同模型",
+                    "steps": [
+                        {"task": "准备数据", "details": "固定训练测试划分"},
+                        {"task": "运行基线", "details": "记录统一指标"},
+                    ],
+                },
+            }
+        )
+
+        self.assertIn("缺陷预测实验", excerpt)
+        self.assertIn("比较不同模型", excerpt)
+        self.assertIn("准备数据", excerpt)
+
+    def test_roadmap_rejects_wrong_upstream_artifact_type(self):
+        payload = ExperimentRoadmapRequest(
+            question_id="artifact-1",
+            objective="验证方法",
+        )
+        with patch.object(
+            routes,
+            "require_owned_row",
+            return_value={"id": "artifact-1", "artifact_type": "code-reproduction"},
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                routes.generate_roadmap(
+                    payload,
+                    user=SimpleNamespace(id="user-1"),
+                )
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("研究问题拆解", raised.exception.detail)
 
 
 class ProjectPlanningAgentConfigTests(unittest.TestCase):

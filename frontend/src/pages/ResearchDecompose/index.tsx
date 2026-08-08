@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, ChevronDown, ChevronRight, BookOpen, Database, ArrowRight, Loader2 } from 'lucide-react';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
 import ProjectContextBar from '@/components/ProjectContextBar';
@@ -109,9 +109,13 @@ function TreeNode({
 function ResearchDecompose() {
   const selectedProjectId = useSelectedProjectId();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const linkedPaperId = searchParams.get('paperId');
+  const incomingDirection = searchParams.get('direction') || '';
   const userId = useAuthStore((state) => state.user?.id || 'anonymous');
   const storageKey = `scipilot-current-research:${userId}${selectedProjectId ? `:${selectedProjectId}` : ''}`;
-  const [direction, setDirection] = useState('');
+  const sourceStorageKey = `${storageKey}:paper-id`;
+  const [direction, setDirection] = useState(incomingDirection);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [tree, setTree] = useState<import('@/types').ResearchTree | null>(null);
   const { addNotification } = useUIStore();
@@ -119,14 +123,25 @@ function ResearchDecompose() {
   useEffect(() => {
     setTree(null);
     const artifactId = localStorage.getItem(storageKey);
-    if (!artifactId) return;
+    const storedPaperId = localStorage.getItem(sourceStorageKey);
+    if (linkedPaperId && storedPaperId !== linkedPaperId) {
+      setDirection(incomingDirection);
+      return;
+    }
+    if (!artifactId) {
+      setDirection(incomingDirection);
+      return;
+    }
     researchAPI.getResearchTree(artifactId)
       .then((response) => {
         setTree(response.data);
         setDirection(response.data.core_question);
       })
-      .catch(() => localStorage.removeItem(storageKey));
-  }, [storageKey]);
+      .catch(() => {
+        localStorage.removeItem(storageKey);
+        localStorage.removeItem(sourceStorageKey);
+      });
+  }, [incomingDirection, linkedPaperId, sourceStorageKey, storageKey]);
 
   const handleAnalyze = async () => {
     if (!direction.trim()) {
@@ -135,9 +150,17 @@ function ResearchDecompose() {
     }
     setIsAnalyzing(true);
     try {
-      const response = await researchAPI.decompose(direction.trim(), selectedProjectId);
+      const response = await researchAPI.decompose(
+        direction.trim(),
+        selectedProjectId,
+        linkedPaperId,
+      );
       setTree(response.data);
-      if (response.data.id) localStorage.setItem(storageKey, response.data.id);
+      if (response.data.id) {
+        localStorage.setItem(storageKey, response.data.id);
+        if (linkedPaperId) localStorage.setItem(sourceStorageKey, linkedPaperId);
+        else localStorage.removeItem(sourceStorageKey);
+      }
       addNotification({ type: 'success', message: '问题拆解完成', duration: 3000 });
     } catch (error) {
       addNotification({
@@ -209,10 +232,10 @@ function ResearchDecompose() {
           </div>
 
           {/* Action Buttons */}
-          <div className="flex gap-3">
-            <button onClick={() => navigate('/paper/read')} className="sci-btn-primary">
+          <div className="flex flex-wrap gap-3">
+            <button onClick={() => navigate('/paper/read')} className="sci-btn-secondary">
               <BookOpen size={16} />
-              跳转论文精读
+              返回论文精读
             </button>
             <button
               onClick={() => {
@@ -220,10 +243,10 @@ function ResearchDecompose() {
                 if (tree.id) params.set('questionId', tree.id);
                 navigate(`/experiment/roadmap?${params.toString()}`);
               }}
-              className="sci-btn-secondary"
+              className="sci-btn-primary"
             >
-              <ArrowRight size={16} />
               生成实验方案
+              <ArrowRight size={16} />
             </button>
           </div>
         </div>

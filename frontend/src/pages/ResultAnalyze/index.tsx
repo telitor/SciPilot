@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
-import { BarChart3, TrendingUp, Download, FileSpreadsheet, Loader2 } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { BarChart3, TrendingUp, Download, FileSpreadsheet, Loader2, ArrowRight, FolderKanban } from 'lucide-react';
 import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts/core';
 import { BarChart, LineChart } from 'echarts/charts';
@@ -22,8 +23,12 @@ echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, LegendCompone
 
 function ResultAnalyze() {
   const selectedProjectId = useSelectedProjectId();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const linkedRepoId = searchParams.get('repoId');
   const userId = useAuthStore((state) => state.user?.id || 'anonymous');
   const storageKey = `scipilot-current-result-analysis:${userId}${selectedProjectId ? `:${selectedProjectId}` : ''}`;
+  const sourceStorageKey = `${storageKey}:repo-id`;
   const [file, setFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<import('@/types').ResultAnalysis | null>(null);
@@ -40,11 +45,16 @@ function ResultAnalyze() {
   useEffect(() => {
     setAnalysis(null);
     const artifactId = localStorage.getItem(storageKey);
+    const storedRepoId = localStorage.getItem(sourceStorageKey);
+    if (linkedRepoId && storedRepoId !== linkedRepoId) return;
     if (!artifactId) return;
     resultAPI.getAnalysis(artifactId)
       .then((response) => setAnalysis(response.data))
-      .catch(() => localStorage.removeItem(storageKey));
-  }, [storageKey]);
+      .catch(() => {
+        localStorage.removeItem(storageKey);
+        localStorage.removeItem(sourceStorageKey);
+      });
+  }, [linkedRepoId, sourceStorageKey, storageKey]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFile = e.target.files?.[0];
@@ -65,9 +75,18 @@ function ResultAnalyze() {
     }
     setIsAnalyzing(true);
     try {
-      const response = await resultAPI.analyze(file, undefined, selectedProjectId);
+      const response = await resultAPI.analyze(
+        file,
+        undefined,
+        selectedProjectId,
+        linkedRepoId,
+      );
       setAnalysis(response.data);
-      if (response.data.id) localStorage.setItem(storageKey, response.data.id);
+      if (response.data.id) {
+        localStorage.setItem(storageKey, response.data.id);
+        if (linkedRepoId) localStorage.setItem(sourceStorageKey, linkedRepoId);
+        else localStorage.removeItem(sourceStorageKey);
+      }
       setChartReady(true);
       addNotification({ type: 'success', message: '数据分析完成', duration: 3000 });
     } catch (error) {
@@ -328,13 +347,22 @@ function ResultAnalyze() {
           </div>
 
           {/* Export */}
-          <div className="flex justify-end gap-3">
+          <div className="flex flex-wrap justify-end gap-3 border-t border-sci-border pt-4">
             <button
               onClick={() => addNotification({ type: 'info', message: '导出功能开发中', duration: 3000 })}
               className="sci-btn-secondary"
             >
               <Download size={16} />
               导出图表
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/projects')}
+              className="sci-btn-primary"
+            >
+              <FolderKanban size={16} />
+              查看项目进度
+              <ArrowRight size={16} />
             </button>
           </div>
         </div>

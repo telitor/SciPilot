@@ -117,6 +117,62 @@ class ResearchProjectRouteTests(unittest.TestCase):
         self.assertEqual(inserted["project_id"], str(PROJECT_ID))
         self.assertEqual(result["messages"], [])
 
+    def test_linked_artifact_cannot_override_its_project(self):
+        other_project_id = UUID("22222222-2222-2222-2222-222222222222")
+
+        with self.assertRaises(HTTPException) as raised:
+            routes._resolve_linked_project_id(
+                PROJECT_ID,
+                other_project_id,
+                "user-1",
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("上游产物", raised.exception.detail)
+
+    def test_project_stage_advances_only_after_successful_output(self):
+        service, query = query_with_result([{"id": str(PROJECT_ID)}])
+        project = {
+            "id": str(PROJECT_ID),
+            "user_id": "user-1",
+            "status": "active",
+            "current_stage": "literature",
+        }
+
+        with (
+            patch.object(routes, "database", return_value=service),
+            patch.object(routes, "_require_project", return_value=project),
+        ):
+            advanced = routes._advance_project_stage(
+                str(PROJECT_ID),
+                "user-1",
+                "question",
+            )
+
+        self.assertTrue(advanced)
+        query.update.assert_called_once_with({"current_stage": "question"})
+
+    def test_project_stage_never_moves_backwards(self):
+        project = {
+            "id": str(PROJECT_ID),
+            "user_id": "user-1",
+            "status": "active",
+            "current_stage": "reproduction",
+        }
+
+        with (
+            patch.object(routes, "database") as database,
+            patch.object(routes, "_require_project", return_value=project),
+        ):
+            advanced = routes._advance_project_stage(
+                str(PROJECT_ID),
+                "user-1",
+                "question",
+            )
+
+        self.assertFalse(advanced)
+        database.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -127,6 +127,7 @@ class LegacyChatRequest(BaseModel):
 class ResearchDecomposeRequest(BaseModel):
     direction: str = Field(min_length=3, max_length=4000)
     project_id: Optional[UUID] = None
+    paper_id: Optional[str] = Field(default=None, max_length=100)
 
 
 class ExperimentRoadmapRequest(BaseModel):
@@ -138,6 +139,7 @@ class ExperimentRoadmapRequest(BaseModel):
 class RepoAnalysisRequest(BaseModel):
     repo_url: str = Field(min_length=8, max_length=2048)
     project_id: Optional[UUID] = None
+    roadmap_id: Optional[str] = Field(default=None, max_length=100)
 
 
 class DiagnoseRequest(BaseModel):

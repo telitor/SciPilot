@@ -41,6 +41,61 @@ const STAGE_LABELS: Record<ResearchProjectStage, string> = {
   completed: '研究完成',
 };
 
+const WORKFLOW_STAGES: ResearchProjectStage[] = [
+  'discovery',
+  'literature',
+  'question',
+  'experiment',
+  'reproduction',
+  'analysis',
+  'completed',
+];
+
+const NEXT_ACTIONS: Partial<Record<ResearchProjectStage, { label: string; path: string }>> = {
+  discovery: { label: '上传并精读论文', path: '/paper/read' },
+  literature: { label: '拆解研究问题', path: '/research/decompose' },
+  question: { label: '规划实验路线', path: '/experiment/roadmap' },
+  experiment: { label: '分析复现仓库', path: '/code/reproduce' },
+  reproduction: { label: '分析实验结果', path: '/result/analyze' },
+};
+
+function nextWorkflowPath(detail: ResearchProjectDetail): string | null {
+  const fallback = NEXT_ACTIONS[detail.current_stage]?.path || null;
+  if (detail.current_stage === 'literature') {
+    const paper = detail.assets.papers[0];
+    if (!paper) return fallback;
+    const params = new URLSearchParams({
+      paperId: paper.id,
+      direction: `基于《${paper.title}》提出可验证的研究问题`,
+    });
+    return `/research/decompose?${params.toString()}`;
+  }
+  const artifactTypeByStage: Partial<Record<ResearchProjectStage, string>> = {
+    question: 'research-decomposition',
+    experiment: 'experiment-roadmap',
+    reproduction: 'code-reproduction',
+  };
+  const artifactType = artifactTypeByStage[detail.current_stage];
+  const artifact = artifactType
+    ? detail.assets.artifacts.find((item) => item.artifact_type === artifactType)
+    : undefined;
+  if (!artifact) return fallback;
+  if (detail.current_stage === 'question') {
+    const params = new URLSearchParams({
+      questionId: artifact.id,
+      objective: artifact.title,
+    });
+    return `/experiment/roadmap?${params.toString()}`;
+  }
+  if (detail.current_stage === 'experiment') {
+    return `/code/reproduce?${new URLSearchParams({ roadmapId: artifact.id }).toString()}`;
+  }
+  if (detail.current_stage === 'reproduction') {
+    return `/result/analyze?${new URLSearchParams({ repoId: artifact.id }).toString()}`;
+  }
+  return fallback;
+}
+
 const ARTIFACT_ROUTES: Record<string, { path: string; storage: string }> = {
   'research-decomposition': { path: '/research/decompose', storage: 'scipilot-current-research' },
   'experiment-roadmap': { path: '/experiment/roadmap', storage: 'scipilot-current-roadmap' },
@@ -131,6 +186,11 @@ function Projects() {
     () => projects.filter((project) => project.status === 'archived'),
     [projects],
   );
+  const currentStageIndex = detail
+    ? Math.max(0, WORKFLOW_STAGES.indexOf(detail.current_stage))
+    : 0;
+  const nextAction = detail ? NEXT_ACTIONS[detail.current_stage] : undefined;
+  const nextActionPath = detail ? nextWorkflowPath(detail) : null;
 
   const handleCreate = async (event: FormEvent) => {
     event.preventDefault();
@@ -364,6 +424,68 @@ function Projects() {
                 >
                   {Object.entries(STAGE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
+              </div>
+
+              <div className="border-b border-sci-border pb-4">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+                  {WORKFLOW_STAGES.map((stage, index) => {
+                    const reached = index <= currentStageIndex;
+                    const current = stage === detail.current_stage;
+                    return (
+                      <div
+                        key={stage}
+                        className={`flex min-w-0 items-center gap-2 border-l-2 px-2 py-2 text-xs ${
+                          current
+                            ? 'border-sci-accent text-sci-accent'
+                            : reached
+                              ? 'border-sci-success text-sci-ink'
+                              : 'border-sci-border text-sci-muted'
+                        }`}
+                      >
+                        {reached ? (
+                          <CheckCircle2 size={14} className="shrink-0" />
+                        ) : (
+                          <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border border-current text-[9px]">
+                            {index + 1}
+                          </span>
+                        )}
+                        <span className="truncate">{STAGE_LABELS[stage]}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm text-sci-muted">
+                    当前阶段：<span className="font-medium text-sci-ink">{STAGE_LABELS[detail.current_stage]}</span>
+                  </p>
+                  {nextAction && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(nextActionPath || nextAction.path)}
+                      className="sci-btn-primary"
+                    >
+                      {nextAction.label}
+                      <ArrowRight size={15} />
+                    </button>
+                  )}
+                  {detail.current_stage === 'analysis' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (window.confirm('确认当前科研流程已经完成？确认后仍可手动调整项目阶段。')) {
+                          void handleStageChange('completed');
+                        }
+                      }}
+                      className="sci-btn-primary"
+                    >
+                      <CheckCircle2 size={15} />
+                      确认研究完成
+                    </button>
+                  )}
+                  {detail.current_stage === 'completed' && (
+                    <span className="sci-badge-success">科研流程已完成</span>
+                  )}
+                </div>
               </div>
 
               <div className="grid gap-3 sm:grid-cols-3">
