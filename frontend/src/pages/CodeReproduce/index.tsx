@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Code2, Search, Folder, File, ChevronRight, ChevronDown, Copy, Check, Terminal, AlertCircle, Loader2, ArrowRight, BarChart3 } from 'lucide-react';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
 import ProjectContextBar from '@/components/ProjectContextBar';
+import { useDurableResearchJob } from '@/hooks/useDurableResearchJob';
 import { codeAPI } from '@/services/api';
 import { getApiErrorMessage } from '@/services/errors';
 import { useAuthStore } from '@/store/authStore';
 import { useSelectedProjectId } from '@/store/projectStore';
 import { useUIStore } from '@/store/uiStore';
-import type { RepoFile } from '@/types';
+import type { CodeReproduction, RepoFile } from '@/types';
 
 function FileTree({ files, depth = 0 }: { files: RepoFile[]; depth?: number }) {
   return (
@@ -63,6 +64,7 @@ function CodeReproduce() {
   const userId = useAuthStore((state) => state.user?.id || 'anonymous');
   const storageKey = `scipilot-current-repository:${userId}${selectedProjectId ? `:${selectedProjectId}` : ''}`;
   const sourceStorageKey = `${storageKey}:roadmap-id`;
+  const jobStorageKey = `${storageKey}:job-id`;
   const [repoUrl, setRepoUrl] = useState(incomingRepoUrl);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [reproduction, setReproduction] = useState<import('@/types').CodeReproduction | null>(null);
@@ -71,6 +73,34 @@ function CodeReproduce() {
   const [isDiagnosing, setIsDiagnosing] = useState(false);
   const [diagnosis, setDiagnosis] = useState('');
   const { addNotification } = useUIStore();
+
+  const handleJobSucceeded = useCallback((result: CodeReproduction) => {
+    setReproduction(result);
+    setRepoUrl(result.repo_url);
+    if (result.id) {
+      localStorage.setItem(storageKey, result.id);
+      if (linkedRoadmapId) localStorage.setItem(sourceStorageKey, linkedRoadmapId);
+      else localStorage.removeItem(sourceStorageKey);
+    }
+    addNotification({ type: 'success', message: '仓库分析完成', duration: 3000 });
+  }, [addNotification, linkedRoadmapId, sourceStorageKey, storageKey]);
+
+  const handleJobFailed = useCallback((message: string) => {
+    addNotification({ type: 'error', message, duration: 5000 });
+  }, [addNotification]);
+
+  const {
+    job,
+    isRunning: isJobRunning,
+    track: trackJob,
+    retry: retryJob,
+  } = useDurableResearchJob<CodeReproduction>({
+    storageKey: jobStorageKey,
+    jobType: 'code-reproduction',
+    projectId: selectedProjectId,
+    onSucceeded: handleJobSucceeded,
+    onFailed: handleJobFailed,
+  });
 
   useEffect(() => {
     setReproduction(null);
@@ -97,6 +127,7 @@ function CodeReproduce() {
   }, [incomingRepoUrl, linkedRoadmapId, sourceStorageKey, storageKey]);
 
   const handleAnalyze = async () => {
+    if (isAnalyzing || isJobRunning) return;
     if (!repoUrl.trim()) {
       addNotification({ type: 'warning', message: '请输入 GitHub 仓库地址', duration: 3000 });
       return;
@@ -104,18 +135,12 @@ function CodeReproduce() {
     setIsAnalyzing(true);
     setDiagnosis('');
     try {
-      const response = await codeAPI.analyzeRepo(
+      const response = await codeAPI.analyzeRepoAsync(
         repoUrl.trim(),
         selectedProjectId,
         linkedRoadmapId,
       );
-      setReproduction(response.data);
-      if (response.data.id) {
-        localStorage.setItem(storageKey, response.data.id);
-        if (linkedRoadmapId) localStorage.setItem(sourceStorageKey, linkedRoadmapId);
-        else localStorage.removeItem(sourceStorageKey);
-      }
-      addNotification({ type: 'success', message: '仓库分析完成', duration: 3000 });
+      trackJob(response.data);
     } catch (error) {
       addNotification({
         type: 'error',
@@ -179,10 +204,10 @@ function CodeReproduce() {
           />
           <button
             onClick={handleAnalyze}
-            disabled={isAnalyzing}
+            disabled={isAnalyzing || isJobRunning}
             className="sci-btn-primary"
           >
-            {isAnalyzing ? (
+            {isAnalyzing || isJobRunning ? (
               <>
                 <Loader2 size={16} className="animate-spin" />
                 分析中
@@ -195,6 +220,16 @@ function CodeReproduce() {
             )}
           </button>
         </div>
+        {isJobRunning && (
+          <p className="mt-3 text-sm text-sci-muted">
+            智能体正在后台分析仓库，当前进度 {job?.progress ?? 0}%。刷新页面后任务会继续。
+          </p>
+        )}
+        {job?.status === 'failed' && (
+          <button type="button" onClick={() => void retryJob()} className="sci-btn-secondary mt-3">
+            重试仓库分析
+          </button>
+        )}
       </div>
 
       <AgentKnowledgePanel category="code-reproduction" />

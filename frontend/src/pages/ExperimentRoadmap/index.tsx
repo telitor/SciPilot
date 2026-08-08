@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Clock, GitFork, Database, Wrench, CheckCircle2, Circle, Loader2, Download, ArrowRight, Code2 } from 'lucide-react';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
 import ProjectContextBar from '@/components/ProjectContextBar';
+import { useDurableResearchJob } from '@/hooks/useDurableResearchJob';
 import { experimentAPI } from '@/services/api';
 import { getApiErrorMessage } from '@/services/errors';
 import { useAuthStore } from '@/store/authStore';
@@ -19,10 +20,38 @@ function ExperimentRoadmap() {
   const userId = useAuthStore((state) => state.user?.id || 'anonymous');
   const storageKey = `scipilot-current-roadmap:${userId}${selectedProjectId ? `:${selectedProjectId}` : ''}`;
   const sourceStorageKey = `${storageKey}:question-id`;
+  const jobStorageKey = `${storageKey}:job-id`;
   const [objective, setObjective] = useState(incomingObjective);
   const [roadmap, setRoadmap] = useState<ExperimentRoadmapData | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const { addNotification } = useUIStore();
+
+  const handleJobSucceeded = useCallback((result: ExperimentRoadmapData) => {
+    setRoadmap(result);
+    if (result.id) {
+      localStorage.setItem(storageKey, result.id);
+      if (linkedQuestionId) localStorage.setItem(sourceStorageKey, linkedQuestionId);
+      else localStorage.removeItem(sourceStorageKey);
+    }
+    addNotification({ type: 'success', message: '实验路线生成完成', duration: 3000 });
+  }, [addNotification, linkedQuestionId, sourceStorageKey, storageKey]);
+
+  const handleJobFailed = useCallback((message: string) => {
+    addNotification({ type: 'error', message, duration: 5000 });
+  }, [addNotification]);
+
+  const {
+    job,
+    isRunning: isJobRunning,
+    track: trackJob,
+    retry: retryJob,
+  } = useDurableResearchJob<ExperimentRoadmapData>({
+    storageKey: jobStorageKey,
+    jobType: 'experiment-roadmap',
+    projectId: selectedProjectId,
+    onSucceeded: handleJobSucceeded,
+    onFailed: handleJobFailed,
+  });
 
   useEffect(() => {
     setRoadmap(null);
@@ -48,6 +77,7 @@ function ExperimentRoadmap() {
   }, [incomingObjective, linkedQuestionId, sourceStorageKey, storageKey]);
 
   const handleGenerate = async () => {
+    if (isGenerating || isJobRunning) return;
     if (!objective.trim()) {
       addNotification({ type: 'warning', message: '请输入研究目标', duration: 3000 });
       return;
@@ -55,18 +85,12 @@ function ExperimentRoadmap() {
     setIsGenerating(true);
     try {
       const questionId = linkedQuestionId || 'manual';
-      const response = await experimentAPI.generateRoadmap(
+      const response = await experimentAPI.generateRoadmapAsync(
         questionId,
         objective.trim(),
         selectedProjectId,
       );
-      setRoadmap(response.data);
-      if (response.data.id) {
-        localStorage.setItem(storageKey, response.data.id);
-        if (linkedQuestionId) localStorage.setItem(sourceStorageKey, linkedQuestionId);
-        else localStorage.removeItem(sourceStorageKey);
-      }
-      addNotification({ type: 'success', message: '实验路线生成完成', duration: 3000 });
+      trackJob(response.data);
     } catch (error) {
       addNotification({
         type: 'error',
@@ -126,13 +150,23 @@ function ExperimentRoadmap() {
           />
           <button
             onClick={handleGenerate}
-            disabled={isGenerating}
+            disabled={isGenerating || isJobRunning}
             className="sci-btn-primary self-end"
           >
-            {isGenerating ? <Loader2 size={16} className="animate-spin" /> : <Wrench size={16} />}
-            {isGenerating ? '规划中' : '生成路线'}
+            {isGenerating || isJobRunning ? <Loader2 size={16} className="animate-spin" /> : <Wrench size={16} />}
+            {isGenerating || isJobRunning ? '规划中' : '生成路线'}
           </button>
         </div>
+        {isJobRunning && (
+          <p className="mt-3 text-sm text-sci-muted">
+            智能体正在后台规划，当前进度 {job?.progress ?? 0}%。刷新页面后任务会继续。
+          </p>
+        )}
+        {job?.status === 'failed' && (
+          <button type="button" onClick={() => void retryJob()} className="sci-btn-secondary mt-3">
+            重试路线生成
+          </button>
+        )}
       </div>
 
       <AgentKnowledgePanel category="project-planning" />

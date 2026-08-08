@@ -88,8 +88,11 @@ class FrontendBackendContractTests(unittest.TestCase):
             ("/chat", "post"): {"conversation_id", "agent_id", "message"},
             ("/conversations/{conversation_id}/messages", "post"): {"content"},
             ("/research/decompose", "post"): {"direction"},
+            ("/research/decompose-async", "post"): {"direction"},
             ("/experiments/generate-roadmap", "post"): {"question_id"},
+            ("/experiments/generate-roadmap-async", "post"): {"question_id"},
             ("/code/analyze-repo", "post"): {"repo_url"},
+            ("/code/analyze-repo-async", "post"): {"repo_url"},
         }
         for (path, method), required in expected_required.items():
             with self.subTest(path=path, method=method):
@@ -98,7 +101,12 @@ class FrontendBackendContractTests(unittest.TestCase):
                 self.assertTrue(required.issubset(set(schema.get("properties", {}))))
 
     def test_upload_contracts_require_file_and_keep_project_optional(self):
-        for path in ("/papers/upload-async", "/papers/upload", "/results/analyze"):
+        for path in (
+            "/papers/upload-async",
+            "/papers/upload",
+            "/results/analyze",
+            "/results/analyze-async",
+        ):
             with self.subTest(path=path):
                 schema = self.request_schema(path, content_type="multipart/form-data")
                 required = set(schema.get("required", []))
@@ -109,6 +117,8 @@ class FrontendBackendContractTests(unittest.TestCase):
 
         responses = self.operation("/papers/upload-async", "post")["responses"]
         self.assertIn("202", responses)
+        result_responses = self.operation("/results/analyze-async", "post")["responses"]
+        self.assertIn("202", result_responses)
 
     def test_workflow_link_fields_are_optional_and_published(self):
         json_links = {
@@ -134,6 +144,18 @@ class FrontendBackendContractTests(unittest.TestCase):
                 "job_id", "paper_id", "status", "progress"
             },
             ("/jobs/{job_id}", "get", "200"): {
+                "id", "job_type", "status", "progress", "attempts", "max_attempts"
+            },
+            ("/research/decompose-async", "post", "202"): {
+                "id", "job_type", "status", "progress", "attempts", "max_attempts"
+            },
+            ("/experiments/generate-roadmap-async", "post", "202"): {
+                "id", "job_type", "status", "progress", "attempts", "max_attempts"
+            },
+            ("/code/analyze-repo-async", "post", "202"): {
+                "id", "job_type", "status", "progress", "attempts", "max_attempts"
+            },
+            ("/results/analyze-async", "post", "202"): {
                 "id", "job_type", "status", "progress", "attempts", "max_attempts"
             },
             ("/chat", "post", "200"): {

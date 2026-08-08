@@ -12,6 +12,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from io import BytesIO, StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote
 
@@ -73,6 +74,7 @@ from services.finetuned_model_service import (
 from services.llm_service import generate_reply
 from services.research_job_service import (
     PermanentResearchJobError,
+    create_or_reuse_research_job,
     create_research_job,
     get_owned_research_job,
     list_owned_research_jobs,
@@ -1705,7 +1707,7 @@ def assign_project_asset(
 
 
 def _public_research_job(job: dict[str, Any]) -> dict[str, Any]:
-    return {
+    payload = {
         key: job.get(key)
         for key in (
             "id",
@@ -1724,6 +1726,38 @@ def _public_research_job(job: dict[str, Any]) -> dict[str, Any]:
             "completed_at",
         )
     }
+    result = job.get("result")
+    payload["error_code"] = (
+        result.get("error_code") if isinstance(result, dict) else None
+    )
+    return payload
+
+
+def _research_job_fingerprint(job_type: str, input_data: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        {"job_type": job_type, "input": input_data},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _enqueue_agent_job(
+    *,
+    user_id: str,
+    job_type: str,
+    input_data: dict[str, Any],
+    project_id: str | None,
+) -> dict[str, Any]:
+    job, _ = create_or_reuse_research_job(
+        user_id=user_id,
+        job_type=job_type,
+        input_data=input_data,
+        idempotency_key=_research_job_fingerprint(job_type, input_data),
+        project_id=project_id,
+    )
+    return _public_research_job(job)
 
 
 def _paper_job_error_message(exc: Exception) -> str:
@@ -1737,7 +1771,56 @@ def _paper_job_error_message(exc: Exception) -> str:
 def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
     """Process one claimed durable job. Called by the application worker."""
 
-    if job.get("job_type") != "paper-analysis":
+    job_type = str(job.get("job_type") or "")
+    if job_type in {
+        "research-decomposition",
+        "experiment-roadmap",
+        "code-reproduction",
+        "result-analysis",
+    }:
+        job_id = str(job["id"])
+        user_id = str(job["user_id"])
+        input_data = job.get("input")
+        if not isinstance(input_data, dict):
+            raise PermanentResearchJobError("任务输入格式无效")
+        user = SimpleNamespace(id=user_id)
+        update_research_job_progress(job_id, 10)
+        try:
+            if job_type == "research-decomposition":
+                result = decompose_research(
+                    ResearchDecomposeRequest.model_validate(input_data),
+                    user=user,
+                )
+            elif job_type == "experiment-roadmap":
+                result = generate_roadmap(
+                    ExperimentRoadmapRequest.model_validate(input_data),
+                    user=user,
+                )
+            elif job_type == "code-reproduction":
+                result = analyze_repository(
+                    RepoAnalysisRequest.model_validate(input_data),
+                    user=user,
+                )
+            else:
+                result = _analyze_result_summary(
+                    file_name=str(input_data.get("file_name") or "results.csv"),
+                    parsed_config=input_data.get("config") or {},
+                    stats=input_data.get("stats") or [],
+                    row_count=int(input_data.get("row_count") or 0),
+                    project_id=input_data.get("project_id"),
+                    repo_id=input_data.get("repo_id"),
+                    user_id=user_id,
+                )
+        except HTTPException as exc:
+            if exc.status_code < 500:
+                raise PermanentResearchJobError(str(exc.detail)) from exc
+            raise
+        except (TypeError, ValueError) as exc:
+            raise PermanentResearchJobError("任务输入格式无效") from exc
+        update_research_job_progress(job_id, 90)
+        return result
+
+    if job_type != "paper-analysis":
         raise PermanentResearchJobError(f"不支持的任务类型：{job.get('job_type')}")
 
     job_id = str(job["id"])
@@ -3025,6 +3108,39 @@ def decompose_research(payload: ResearchDecomposeRequest, user=Depends(get_curre
     return {"id": artifact["id"], "project_id": project_id, **content}
 
 
+@router.post(
+    "/research/decompose-async",
+    status_code=202,
+    response_model=ResearchJobResponse,
+)
+def enqueue_research_decomposition(
+    payload: ResearchDecomposeRequest,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    source_paper = None
+    if payload.paper_id:
+        source_paper = require_owned_row(
+            "papers",
+            payload.paper_id,
+            user_id,
+            columns="id,project_id",
+        )
+    project_id = _resolve_linked_project_id(
+        str(payload.project_id) if payload.project_id else None,
+        source_paper.get("project_id") if source_paper else None,
+        user_id,
+    )
+    input_data = payload.model_dump(mode="json")
+    input_data["project_id"] = project_id
+    return _enqueue_agent_job(
+        user_id=user_id,
+        job_type="research-decomposition",
+        input_data=input_data,
+        project_id=project_id,
+    )
+
+
 @router.get("/research/{artifact_id}", response_model=ResearchTreeResponse)
 def get_research(artifact_id: str, user=Depends(get_current_user)):
     artifact = require_owned_row("research_artifacts", artifact_id, str(user.id))
@@ -3207,6 +3323,36 @@ def generate_roadmap(payload: ExperimentRoadmapRequest, user=Depends(get_current
         project_id=project_id,
     )
     return {"id": artifact["id"], "project_id": project_id, **content}
+
+
+@router.post(
+    "/experiments/generate-roadmap-async",
+    status_code=202,
+    response_model=ResearchJobResponse,
+)
+def enqueue_experiment_roadmap(
+    payload: ExperimentRoadmapRequest,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    source = None
+    if payload.question_id != "manual":
+        source = require_owned_row("research_artifacts", payload.question_id, user_id)
+        if source.get("artifact_type") != "research-decomposition":
+            raise HTTPException(status_code=400, detail="上游产物不是研究问题拆解结果")
+    project_id = _resolve_linked_project_id(
+        str(payload.project_id) if payload.project_id else None,
+        source.get("project_id") if source else None,
+        user_id,
+    )
+    input_data = payload.model_dump(mode="json")
+    input_data["project_id"] = project_id
+    return _enqueue_agent_job(
+        user_id=user_id,
+        job_type="experiment-roadmap",
+        input_data=input_data,
+        project_id=project_id,
+    )
 
 
 @router.get("/experiments/{artifact_id}", response_model=ExperimentRoadmapResponse)
@@ -3482,6 +3628,45 @@ def analyze_repository(payload: RepoAnalysisRequest, user=Depends(get_current_us
     return {"id": artifact["id"], "project_id": project_id, **content}
 
 
+@router.post(
+    "/code/analyze-repo-async",
+    status_code=202,
+    response_model=ResearchJobResponse,
+)
+def enqueue_repository_analysis(
+    payload: RepoAnalysisRequest,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    source_roadmap = None
+    if payload.roadmap_id:
+        source_roadmap = require_owned_row(
+            "research_artifacts",
+            payload.roadmap_id,
+            user_id,
+        )
+        if source_roadmap.get("artifact_type") != "experiment-roadmap":
+            raise HTTPException(status_code=400, detail="上游产物不是实验路线")
+    project_id = _resolve_linked_project_id(
+        str(payload.project_id) if payload.project_id else None,
+        source_roadmap.get("project_id") if source_roadmap else None,
+        user_id,
+    )
+    if not re.match(
+        r"^https?://github\.com/([^/]+)/([^/#?]+)",
+        payload.repo_url.strip(),
+    ):
+        raise HTTPException(status_code=400, detail="请输入有效的 GitHub 仓库地址")
+    input_data = payload.model_dump(mode="json")
+    input_data["project_id"] = project_id
+    return _enqueue_agent_job(
+        user_id=user_id,
+        job_type="code-reproduction",
+        input_data=input_data,
+        project_id=project_id,
+    )
+
+
 @router.get("/code/{artifact_id}", response_model=CodeReproductionResponse)
 def get_repository_analysis(artifact_id: str, user=Depends(get_current_user)):
     artifact = require_owned_row("research_artifacts", artifact_id, str(user.id))
@@ -3544,6 +3729,144 @@ def _read_tabular(file_name: str, content: bytes) -> list[dict[str, Any]]:
         headers = [str(value) if value is not None else "" for value in next(rows)]
         return [dict(zip(headers, row)) for _, row in zip(range(10_000), rows)]
     raise ValueError("只支持 CSV、JSON 或 XLSX")
+
+
+def _tabular_stats(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    numeric: dict[str, list[float]] = {}
+    for row in rows:
+        for key, value in row.items():
+            try:
+                number = float(value)
+                if math.isfinite(number):
+                    numeric.setdefault(str(key), []).append(number)
+            except (TypeError, ValueError):
+                continue
+    stats: list[dict[str, Any]] = []
+    for metric, values in list(numeric.items())[:50]:
+        mean = statistics.fmean(values)
+        std = statistics.stdev(values) if len(values) > 1 else 0.0
+        margin = 1.96 * std / math.sqrt(len(values)) if values else 0.0
+        stats.append(
+            {
+                "metric": metric,
+                "mean": mean,
+                "std": std,
+                "min": min(values),
+                "max": max(values),
+                "ci95": [mean - margin, mean + margin],
+                "count": len(values),
+            }
+        )
+    return stats
+
+
+def _analyze_result_summary(
+    *,
+    file_name: str,
+    parsed_config: dict[str, Any],
+    stats: list[dict[str, Any]],
+    row_count: int,
+    project_id: str | None,
+    repo_id: str | None,
+    user_id: str,
+) -> dict[str, Any]:
+    source_repository = None
+    if repo_id:
+        source_repository = require_owned_row(
+            "research_artifacts",
+            repo_id,
+            user_id,
+        )
+        if source_repository.get("artifact_type") != "code-reproduction":
+            raise HTTPException(status_code=400, detail="上游产物不是代码复现分析")
+    resolved_project_id = _resolve_linked_project_id(
+        project_id,
+        source_repository.get("project_id") if source_repository else None,
+        user_id,
+    )
+    if not isinstance(parsed_config, dict):
+        raise HTTPException(status_code=400, detail="分析配置必须是 JSON 对象")
+    if not isinstance(stats, list) or not stats:
+        raise HTTPException(status_code=422, detail="结果文件中没有可分析的数值字段")
+
+    agent = _pick_agent("result")
+    repository_context = (
+        _artifact_context_excerpt(source_repository) if source_repository else ""
+    )
+    project_context = _project_context_summary(resolved_project_id, user_id)
+    prompt = f"""请解释下面真实实验数据的统计摘要。
+只返回合法 JSON，不要使用 Markdown 代码块或额外说明。JSON 格式：
+{{
+  "interpretation": "结合均值、标准差、范围、样本量和置信区间给出严谨结论，并说明结论边界",
+  "suggestions": ["下一步检查或改进建议"]
+}}
+不得编造未提供的实验设置、显著性检验或因果结论。
+文件名：{file_name}
+分析配置：{json.dumps(parsed_config, ensure_ascii=False)}
+统计摘要：{json.dumps(stats, ensure_ascii=False)}
+
+关联代码复现记录：{repository_context or '未指定'}
+
+当前项目已有产物摘要：{project_context or '暂无'}"""
+    try:
+        raw_reply = generate_reply(
+            system_prompt=str(agent.get("system_prompt") or ""),
+            user_message=prompt,
+            agent_category="result-interpretation",
+            user_id=user_id,
+        )
+    except Exception as exc:
+        raise _agent_service_exception("result-interpretation", exc) from None
+    agent_result = _parse_agent_json_object(raw_reply)
+    if agent_result:
+        interpretation = str(agent_result.get("interpretation") or "").strip()
+        suggestions = _string_list(agent_result.get("suggestions"), limit=12)
+    else:
+        interpretation = raw_reply.strip()
+        suggestions = []
+    if not interpretation:
+        raise HTTPException(status_code=502, detail="结果分析 Agent 未返回有效结论")
+
+    result_content = {
+        "charts": [
+            {
+                "type": "bar",
+                "title": "数值字段均值",
+                "data": {
+                    "labels": [item["metric"] for item in stats],
+                    "values": [item["mean"] for item in stats],
+                },
+            }
+        ],
+        "stats": stats,
+        "interpretation": interpretation,
+        "suggestions": suggestions,
+        "row_count": row_count,
+        "generation_mode": "local-statistics+xunfei-star-agent",
+    }
+    artifact = _save_artifact(
+        user_id,
+        "result-analysis",
+        file_name or "结果分析",
+        {
+            "file_name": file_name,
+            "config": parsed_config,
+            "repo_id": repo_id,
+        },
+        result_content,
+        resolved_project_id,
+    )
+    _advance_project_stage(resolved_project_id, user_id, "analysis")
+    record_activity(
+        user_id,
+        "result",
+        "分析实验结果",
+        file_name or "结果文件",
+        entity_type="artifact",
+        entity_id=artifact["id"],
+        project_id=resolved_project_id,
+    )
+    return {"id": artifact["id"], "project_id": resolved_project_id, **result_content}
 
 
 @router.post("/results/analyze", response_model=ResultAnalysisResponse)
@@ -3691,6 +4014,70 @@ async def analyze_results(
         project_id=project_id,
     )
     return {"id": artifact["id"], "project_id": project_id, **result_content}
+
+
+@router.post(
+    "/results/analyze-async",
+    status_code=202,
+    response_model=ResearchJobResponse,
+)
+async def enqueue_result_analysis(
+    file: UploadFile = File(...),
+    config: str | None = Form(default=None),
+    project_id: str | None = Form(default=None),
+    repo_id: str | None = Form(default=None),
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    source_repository = None
+    if repo_id:
+        source_repository = require_owned_row(
+            "research_artifacts",
+            repo_id,
+            user_id,
+        )
+        if source_repository.get("artifact_type") != "code-reproduction":
+            raise HTTPException(status_code=400, detail="上游产物不是代码复现分析")
+    resolved_project_id = _resolve_linked_project_id(
+        project_id,
+        source_repository.get("project_id") if source_repository else None,
+        user_id,
+    )
+
+    raw = await file.read(20 * 1024 * 1024 + 1)
+    if len(raw) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="结果文件超过 20MB")
+    file_name = file.filename or "results.csv"
+    try:
+        rows = _read_tabular(file_name, raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"无法读取结果文件：{exc}") from None
+    if not rows:
+        raise HTTPException(status_code=422, detail="结果文件没有可分析的数据行")
+    try:
+        parsed_config = json.loads(config) if config else {}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="分析配置不是合法 JSON") from None
+    if not isinstance(parsed_config, dict):
+        raise HTTPException(status_code=400, detail="分析配置必须是 JSON 对象")
+    stats = _tabular_stats(rows)
+    if not stats:
+        raise HTTPException(status_code=422, detail="结果文件中没有可分析的数值字段")
+
+    input_data = {
+        "file_name": file_name,
+        "config": parsed_config,
+        "stats": stats,
+        "row_count": len(rows),
+        "project_id": resolved_project_id,
+        "repo_id": repo_id,
+    }
+    return _enqueue_agent_job(
+        user_id=user_id,
+        job_type="result-analysis",
+        input_data=input_data,
+        project_id=resolved_project_id,
+    )
 
 
 @router.get("/results/{artifact_id}", response_model=ResultAnalysisResponse)

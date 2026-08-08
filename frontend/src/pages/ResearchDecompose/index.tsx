@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, ChevronDown, ChevronRight, BookOpen, Database, ArrowRight, Loader2 } from 'lucide-react';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
 import ProjectContextBar from '@/components/ProjectContextBar';
+import { useDurableResearchJob } from '@/hooks/useDurableResearchJob';
 import { researchAPI } from '@/services/api';
 import { getApiErrorMessage } from '@/services/errors';
 import { useAuthStore } from '@/store/authStore';
 import { useSelectedProjectId } from '@/store/projectStore';
 import { useUIStore } from '@/store/uiStore';
-import type { ResearchNode } from '@/types';
+import type { ResearchNode, ResearchTree } from '@/types';
 
 function FeasibilityBadge({ level }: { level: 'high' | 'medium' | 'low' }) {
   const config = {
@@ -115,10 +116,38 @@ function ResearchDecompose() {
   const userId = useAuthStore((state) => state.user?.id || 'anonymous');
   const storageKey = `scipilot-current-research:${userId}${selectedProjectId ? `:${selectedProjectId}` : ''}`;
   const sourceStorageKey = `${storageKey}:paper-id`;
+  const jobStorageKey = `${storageKey}:job-id`;
   const [direction, setDirection] = useState(incomingDirection);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [tree, setTree] = useState<import('@/types').ResearchTree | null>(null);
   const { addNotification } = useUIStore();
+
+  const handleJobSucceeded = useCallback((result: ResearchTree) => {
+    setTree(result);
+    if (result.id) {
+      localStorage.setItem(storageKey, result.id);
+      if (linkedPaperId) localStorage.setItem(sourceStorageKey, linkedPaperId);
+      else localStorage.removeItem(sourceStorageKey);
+    }
+    addNotification({ type: 'success', message: '问题拆解完成', duration: 3000 });
+  }, [addNotification, linkedPaperId, sourceStorageKey, storageKey]);
+
+  const handleJobFailed = useCallback((message: string) => {
+    addNotification({ type: 'error', message, duration: 5000 });
+  }, [addNotification]);
+
+  const {
+    job,
+    isRunning: isJobRunning,
+    track: trackJob,
+    retry: retryJob,
+  } = useDurableResearchJob<ResearchTree>({
+    storageKey: jobStorageKey,
+    jobType: 'research-decomposition',
+    projectId: selectedProjectId,
+    onSucceeded: handleJobSucceeded,
+    onFailed: handleJobFailed,
+  });
 
   useEffect(() => {
     setTree(null);
@@ -144,24 +173,19 @@ function ResearchDecompose() {
   }, [incomingDirection, linkedPaperId, sourceStorageKey, storageKey]);
 
   const handleAnalyze = async () => {
+    if (isAnalyzing || isJobRunning) return;
     if (!direction.trim()) {
       addNotification({ type: 'warning', message: '请输入研究方向', duration: 3000 });
       return;
     }
     setIsAnalyzing(true);
     try {
-      const response = await researchAPI.decompose(
+      const response = await researchAPI.decomposeAsync(
         direction.trim(),
         selectedProjectId,
         linkedPaperId,
       );
-      setTree(response.data);
-      if (response.data.id) {
-        localStorage.setItem(storageKey, response.data.id);
-        if (linkedPaperId) localStorage.setItem(sourceStorageKey, linkedPaperId);
-        else localStorage.removeItem(sourceStorageKey);
-      }
-      addNotification({ type: 'success', message: '问题拆解完成', duration: 3000 });
+      trackJob(response.data);
     } catch (error) {
       addNotification({
         type: 'error',
@@ -194,10 +218,10 @@ function ResearchDecompose() {
           />
           <button
             onClick={handleAnalyze}
-            disabled={isAnalyzing}
+            disabled={isAnalyzing || isJobRunning}
             className="sci-btn-primary"
           >
-            {isAnalyzing ? (
+            {isAnalyzing || isJobRunning ? (
               <>
                 <Loader2 size={16} className="animate-spin" />
                 分析中
@@ -210,6 +234,16 @@ function ResearchDecompose() {
             )}
           </button>
         </div>
+        {isJobRunning && (
+          <p className="mt-3 text-sm text-sci-muted">
+            智能体正在后台拆解，当前进度 {job?.progress ?? 0}%。刷新页面后任务会继续。
+          </p>
+        )}
+        {job?.status === 'failed' && (
+          <button type="button" onClick={() => void retryJob()} className="sci-btn-secondary mt-3">
+            重试问题拆解
+          </button>
+        )}
       </div>
 
       <AgentKnowledgePanel category="problem-decomposition" />

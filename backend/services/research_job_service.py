@@ -66,6 +66,47 @@ def create_research_job(
     return job
 
 
+def create_or_reuse_research_job(
+    *,
+    user_id: str,
+    job_type: str,
+    input_data: dict[str, Any],
+    idempotency_key: str,
+    project_id: str | None = None,
+    paper_id: str | None = None,
+    max_attempts: int = 3,
+) -> tuple[dict[str, Any], bool]:
+    """Reuse an equivalent active job, or create a new durable job."""
+
+    stored_input = {**input_data, "idempotency_key": idempotency_key}
+    for job in list_owned_research_jobs(
+        user_id,
+        job_type=job_type,
+        project_id=project_id,
+        limit=20,
+    ):
+        if job.get("status") not in {"pending", "running"}:
+            continue
+        current_input = job.get("input")
+        if (
+            isinstance(current_input, dict)
+            and current_input.get("idempotency_key") == idempotency_key
+        ):
+            return job, False
+
+    return (
+        create_research_job(
+            user_id=user_id,
+            job_type=job_type,
+            input_data=stored_input,
+            project_id=project_id,
+            paper_id=paper_id,
+            max_attempts=max_attempts,
+        ),
+        True,
+    )
+
+
 def get_owned_research_job(job_id: str, user_id: str) -> dict[str, Any]:
     result = (
         _database()
@@ -115,6 +156,7 @@ def retry_owned_research_job(job_id: str, user_id: str) -> dict[str, Any]:
                 "status": "pending",
                 "progress": 0,
                 "error_message": None,
+                "result": {},
                 "attempts": 0,
                 "available_at": datetime.now(timezone.utc).isoformat(),
                 "lease_owner": None,
@@ -186,6 +228,19 @@ def _safe_error_message(exc: Exception) -> str:
     return "任务执行失败，请稍后重试"
 
 
+def _error_code(exc: Exception) -> str:
+    if isinstance(exc, PermanentResearchJobError):
+        return "invalid_input"
+    if isinstance(exc, HTTPException):
+        if exc.status_code in {408, 504}:
+            return "timeout"
+        if exc.status_code >= 500:
+            return "upstream_unavailable"
+    if "timeout" in str(exc).lower():
+        return "timeout"
+    return "internal_error"
+
+
 def record_research_job_failure(
     job: dict[str, Any], exc: Exception
 ) -> dict[str, Any]:
@@ -198,6 +253,7 @@ def record_research_job_failure(
     updates: dict[str, Any] = {
         "status": "pending" if should_retry else "failed",
         "error_message": _safe_error_message(exc),
+        "result": {"error_code": _error_code(exc)},
         "lease_owner": None,
         "lease_expires_at": None,
         "available_at": (now + timedelta(seconds=delay_seconds)).isoformat(),
@@ -229,7 +285,7 @@ async def run_research_job_worker(
     terminal_failure_handler: Callable[[dict[str, Any], Exception], None] | None = None,
 ) -> None:
     worker_id = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
-    lease_seconds = max(120, min(int(os.getenv("RESEARCH_JOB_LEASE_SECONDS", "300")), 900))
+    lease_seconds = max(120, min(int(os.getenv("RESEARCH_JOB_LEASE_SECONDS", "600")), 900))
     poll_seconds = max(1.0, float(os.getenv("RESEARCH_JOB_POLL_SECONDS", "2")))
     logger.info("Research job worker started worker_id=%s", worker_id)
 

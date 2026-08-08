@@ -226,6 +226,7 @@ class ResearchJobResponse(BaseModel):
     progress: int = Field(ge=0, le=100)
     result: dict[str, Any] = Field(default_factory=dict)
     error_message: Optional[str] = None
+    error_code: Optional[str] = None
     attempts: int = Field(ge=0)
     max_attempts: int = Field(ge=1)
     created_at: Optional[str] = None

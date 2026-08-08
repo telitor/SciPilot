@@ -140,6 +140,13 @@ export const researchAPI = {
       { timeout: 150000 },
     ),
 
+  decomposeAsync: (direction: string, projectId?: string | null, paperId?: string | null) =>
+    apiClient.post<ResearchJob>('/research/decompose-async', {
+      direction,
+      project_id: projectId || undefined,
+      paper_id: paperId || undefined,
+    }),
+
   getResearchTree: (id: string) => apiClient.get<ResearchTree>(`/research/${id}`),
 };
 
@@ -162,6 +169,13 @@ export const experimentAPI = {
       { timeout: 150000 },
     ),
 
+  generateRoadmapAsync: (questionId: string, objective?: string, projectId?: string | null) =>
+    apiClient.post<ResearchJob>('/experiments/generate-roadmap-async', {
+      question_id: questionId,
+      objective,
+      project_id: projectId || undefined,
+    }),
+
   getRoadmap: (id: string) => apiClient.get<ExperimentRoadmap>(`/experiments/${id}`),
 };
 
@@ -177,6 +191,13 @@ export const codeAPI = {
       },
       { timeout: 150000 },
     ),
+
+  analyzeRepoAsync: (repoUrl: string, projectId?: string | null, roadmapId?: string | null) =>
+    apiClient.post<ResearchJob>('/code/analyze-repo-async', {
+      repo_url: repoUrl,
+      project_id: projectId || undefined,
+      roadmap_id: roadmapId || undefined,
+    }),
 
   getRepoAnalysis: (id: string) => apiClient.get<CodeReproduction>(`/code/${id}`),
 
@@ -202,6 +223,20 @@ export const resultAPI = {
     if (projectId) formData.append('project_id', projectId);
     if (repoId) formData.append('repo_id', repoId);
     return apiClient.post<ResultAnalysis>('/results/analyze', formData, { timeout: 150000 });
+  },
+
+  analyzeAsync: (
+    file: File,
+    config?: Record<string, unknown>,
+    projectId?: string | null,
+    repoId?: string | null,
+  ) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (config) formData.append('config', JSON.stringify(config));
+    if (projectId) formData.append('project_id', projectId);
+    if (repoId) formData.append('repo_id', repoId);
+    return apiClient.post<ResearchJob>('/results/analyze-async', formData, { timeout: 60000 });
   },
 
   getAnalysis: (id: string) => apiClient.get<ResultAnalysis>(`/results/${id}`),

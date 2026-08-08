@@ -82,6 +82,7 @@ export interface ResearchJob {
   progress: number;
   result?: Record<string, unknown>;
   error_message?: string | null;
+  error_code?: string | null;
   attempts: number;
   max_attempts: number;
   created_at: string;

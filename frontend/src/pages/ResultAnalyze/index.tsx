@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useCallback, useState, useMemo, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { BarChart3, TrendingUp, Download, FileSpreadsheet, Loader2, ArrowRight, FolderKanban } from 'lucide-react';
 import ReactECharts from 'echarts-for-react';
@@ -12,11 +12,13 @@ import {
 import { CanvasRenderer } from 'echarts/renderers';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
 import ProjectContextBar from '@/components/ProjectContextBar';
+import { useDurableResearchJob } from '@/hooks/useDurableResearchJob';
 import { resultAPI } from '@/services/api';
 import { getApiErrorMessage } from '@/services/errors';
 import { useAuthStore } from '@/store/authStore';
 import { useSelectedProjectId } from '@/store/projectStore';
 import { useUIStore } from '@/store/uiStore';
+import type { ResultAnalysis } from '@/types';
 
 // Register ECharts modules manually to avoid window.echarts dependency
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
@@ -29,11 +31,40 @@ function ResultAnalyze() {
   const userId = useAuthStore((state) => state.user?.id || 'anonymous');
   const storageKey = `scipilot-current-result-analysis:${userId}${selectedProjectId ? `:${selectedProjectId}` : ''}`;
   const sourceStorageKey = `${storageKey}:repo-id`;
+  const jobStorageKey = `${storageKey}:job-id`;
   const [file, setFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<import('@/types').ResultAnalysis | null>(null);
   const [chartReady, setChartReady] = useState(false);
   const { addNotification } = useUIStore();
+
+  const handleJobSucceeded = useCallback((result: ResultAnalysis) => {
+    setAnalysis(result);
+    if (result.id) {
+      localStorage.setItem(storageKey, result.id);
+      if (linkedRepoId) localStorage.setItem(sourceStorageKey, linkedRepoId);
+      else localStorage.removeItem(sourceStorageKey);
+    }
+    setChartReady(true);
+    addNotification({ type: 'success', message: '数据分析完成', duration: 3000 });
+  }, [addNotification, linkedRepoId, sourceStorageKey, storageKey]);
+
+  const handleJobFailed = useCallback((message: string) => {
+    addNotification({ type: 'error', message, duration: 5000 });
+  }, [addNotification]);
+
+  const {
+    job,
+    isRunning: isJobRunning,
+    track: trackJob,
+    retry: retryJob,
+  } = useDurableResearchJob<ResultAnalysis>({
+    storageKey: jobStorageKey,
+    jobType: 'result-analysis',
+    projectId: selectedProjectId,
+    onSucceeded: handleJobSucceeded,
+    onFailed: handleJobFailed,
+  });
 
   // Ensure echarts is loaded before creating chart options
   useEffect(() => {
@@ -69,26 +100,20 @@ function ResultAnalyze() {
   };
 
   const handleAnalyze = async () => {
+    if (isAnalyzing || isJobRunning) return;
     if (!file) {
       addNotification({ type: 'warning', message: '请先上传数据文件', duration: 3000 });
       return;
     }
     setIsAnalyzing(true);
     try {
-      const response = await resultAPI.analyze(
+      const response = await resultAPI.analyzeAsync(
         file,
         undefined,
         selectedProjectId,
         linkedRepoId,
       );
-      setAnalysis(response.data);
-      if (response.data.id) {
-        localStorage.setItem(storageKey, response.data.id);
-        if (linkedRepoId) localStorage.setItem(sourceStorageKey, linkedRepoId);
-        else localStorage.removeItem(sourceStorageKey);
-      }
-      setChartReady(true);
-      addNotification({ type: 'success', message: '数据分析完成', duration: 3000 });
+      trackJob(response.data);
     } catch (error) {
       addNotification({
         type: 'error',
@@ -240,10 +265,10 @@ function ResultAnalyze() {
           </div>
           <button
             onClick={handleAnalyze}
-            disabled={isAnalyzing || !file}
+            disabled={isAnalyzing || isJobRunning || !file}
             className="sci-btn-primary self-end"
           >
-            {isAnalyzing ? (
+            {isAnalyzing || isJobRunning ? (
               <>
                 <Loader2 size={16} className="animate-spin" />
                 分析中
@@ -256,6 +281,16 @@ function ResultAnalyze() {
             )}
           </button>
         </div>
+        {isJobRunning && (
+          <p className="mt-3 text-sm text-sci-muted">
+            智能体正在后台解释结果，当前进度 {job?.progress ?? 0}%。刷新页面后任务会继续。
+          </p>
+        )}
+        {job?.status === 'failed' && (
+          <button type="button" onClick={() => void retryJob()} className="sci-btn-secondary mt-3">
+            重试结果分析
+          </button>
+        )}
       </div>
 
       <AgentKnowledgePanel category="result-interpretation" />
