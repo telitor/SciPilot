@@ -1,12 +1,63 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Clock, GitFork, Database, Wrench, CheckCircle2, Circle, Loader2, Download } from 'lucide-react';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
-import { mockAPI } from '@/services/api';
+import ProjectContextBar from '@/components/ProjectContextBar';
+import { experimentAPI } from '@/services/api';
+import { getApiErrorMessage } from '@/services/errors';
+import { useAuthStore } from '@/store/authStore';
+import { useSelectedProjectId } from '@/store/projectStore';
 import { useUIStore } from '@/store/uiStore';
+import type { ExperimentRoadmap as ExperimentRoadmapData } from '@/types';
 
 function ExperimentRoadmap() {
-  const [roadmap] = useState(mockAPI.getMockExperimentRoadmap());
+  const selectedProjectId = useSelectedProjectId();
+  const [searchParams] = useSearchParams();
+  const userId = useAuthStore((state) => state.user?.id || 'anonymous');
+  const storageKey = `scipilot-current-roadmap:${userId}${selectedProjectId ? `:${selectedProjectId}` : ''}`;
+  const [objective, setObjective] = useState(searchParams.get('objective') || '');
+  const [roadmap, setRoadmap] = useState<ExperimentRoadmapData | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
   const { addNotification } = useUIStore();
+
+  useEffect(() => {
+    setRoadmap(null);
+    const artifactId = localStorage.getItem(storageKey);
+    if (!artifactId) return;
+    experimentAPI.getRoadmap(artifactId)
+      .then((response) => {
+        setRoadmap(response.data);
+        if (!searchParams.get('objective')) setObjective(response.data.objective);
+      })
+      .catch(() => localStorage.removeItem(storageKey));
+  }, [searchParams, storageKey]);
+
+  const handleGenerate = async () => {
+    if (!objective.trim()) {
+      addNotification({ type: 'warning', message: '请输入研究目标', duration: 3000 });
+      return;
+    }
+    setIsGenerating(true);
+    try {
+      const questionId = searchParams.get('questionId') || 'manual';
+      const response = await experimentAPI.generateRoadmap(
+        questionId,
+        objective.trim(),
+        selectedProjectId,
+      );
+      setRoadmap(response.data);
+      if (response.data.id) localStorage.setItem(storageKey, response.data.id);
+      addNotification({ type: 'success', message: '实验路线生成完成', duration: 3000 });
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        message: getApiErrorMessage(error, '实验路线生成失败，请检查项目规划智能体配置'),
+        duration: 5000,
+      });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
   const getStatusIcon = (status?: string) => {
     switch (status) {
@@ -42,16 +93,37 @@ function ExperimentRoadmap() {
           导出方案
         </button>
       </div>
+      <ProjectContextBar />
 
-      {/* Objective */}
       <div className="sci-card-glow">
-        <h2 className="text-lg font-semibold mb-2">研究目标</h2>
-        <p className="text-sci-muted">{roadmap.objective}</p>
+        <label className="block text-sm font-medium text-sci-ink mb-3">研究目标</label>
+        <div className="flex gap-3">
+          <textarea
+            value={objective}
+            onChange={(event) => setObjective(event.target.value)}
+            placeholder="例如：比较不同代码表征模型在跨项目缺陷预测上的效果"
+            rows={3}
+            className="sci-input flex-1 resize-none"
+          />
+          <button
+            onClick={handleGenerate}
+            disabled={isGenerating}
+            className="sci-btn-primary self-end"
+          >
+            {isGenerating ? <Loader2 size={16} className="animate-spin" /> : <Wrench size={16} />}
+            {isGenerating ? '规划中' : '生成路线'}
+          </button>
+        </div>
       </div>
 
       <AgentKnowledgePanel category="project-planning" />
 
-      <div className="grid lg:grid-cols-3 gap-6">
+      {roadmap && <div className="sci-card-glow">
+        <h2 className="text-lg font-semibold mb-2">当前研究目标</h2>
+        <p className="text-sci-muted">{roadmap.objective}</p>
+      </div>}
+
+      {roadmap && <div className="grid lg:grid-cols-3 gap-6">
         {/* Timeline */}
         <div className="lg:col-span-2 space-y-4">
           <h2 className="sci-section-title">实验步骤</h2>
@@ -96,10 +168,12 @@ function ExperimentRoadmap() {
                 <div key={baseline.name} className="sci-card">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="font-semibold text-sci-accent">{baseline.name}</h3>
-                    <span className="text-xs text-sci-muted flex items-center gap-1">
-                      <GitFork size={12} />
-                      {baseline.stars}
-                    </span>
+                    {typeof baseline.stars === 'number' && (
+                      <span className="text-xs text-sci-muted flex items-center gap-1">
+                        <GitFork size={12} />
+                        {baseline.stars}
+                      </span>
+                    )}
                   </div>
                   <p className="text-sm text-sci-muted mb-2">{baseline.description}</p>
                   <a
@@ -148,7 +222,7 @@ function ExperimentRoadmap() {
             </div>
           </div>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

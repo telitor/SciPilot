@@ -211,6 +211,7 @@ def record_activity(
     *,
     entity_type: str | None = None,
     entity_id: str | None = None,
+    project_id: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
     """Record activity without making the primary operation fail."""
@@ -227,6 +228,7 @@ def record_activity(
                 "target": target[:500],
                 "entity_type": entity_type,
                 "entity_id": entity_id,
+                "project_id": project_id,
                 "metadata": metadata or {},
             }
         ).execute()

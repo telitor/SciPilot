@@ -1,7 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Search, ChevronDown, ChevronRight, BookOpen, Database, ArrowRight, Loader2 } from 'lucide-react';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
-import { mockAPI } from '@/services/api';
+import ProjectContextBar from '@/components/ProjectContextBar';
+import { researchAPI } from '@/services/api';
+import { getApiErrorMessage } from '@/services/errors';
+import { useAuthStore } from '@/store/authStore';
+import { useSelectedProjectId } from '@/store/projectStore';
 import { useUIStore } from '@/store/uiStore';
 import type { ResearchNode } from '@/types';
 
@@ -102,10 +107,26 @@ function TreeNode({
 }
 
 function ResearchDecompose() {
+  const selectedProjectId = useSelectedProjectId();
+  const navigate = useNavigate();
+  const userId = useAuthStore((state) => state.user?.id || 'anonymous');
+  const storageKey = `scipilot-current-research:${userId}${selectedProjectId ? `:${selectedProjectId}` : ''}`;
   const [direction, setDirection] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [tree, setTree] = useState<import('@/types').ResearchTree | null>(null);
   const { addNotification } = useUIStore();
+
+  useEffect(() => {
+    setTree(null);
+    const artifactId = localStorage.getItem(storageKey);
+    if (!artifactId) return;
+    researchAPI.getResearchTree(artifactId)
+      .then((response) => {
+        setTree(response.data);
+        setDirection(response.data.core_question);
+      })
+      .catch(() => localStorage.removeItem(storageKey));
+  }, [storageKey]);
 
   const handleAnalyze = async () => {
     if (!direction.trim()) {
@@ -113,21 +134,26 @@ function ResearchDecompose() {
       return;
     }
     setIsAnalyzing(true);
-
-    // TODO: Replace with actual API call
-    // const response = await researchAPI.decompose(direction);
-    // setTree(response.data);
-
-    setTimeout(() => {
-      setTree(mockAPI.getMockResearchTree());
-      setIsAnalyzing(false);
+    try {
+      const response = await researchAPI.decompose(direction.trim(), selectedProjectId);
+      setTree(response.data);
+      if (response.data.id) localStorage.setItem(storageKey, response.data.id);
       addNotification({ type: 'success', message: '问题拆解完成', duration: 3000 });
-    }, 2000);
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        message: getApiErrorMessage(error, '问题拆解失败，请检查后端智能体配置'),
+        duration: 5000,
+      });
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   return (
     <div className="space-y-6 pb-20 md:pb-0">
       <h1 className="text-2xl font-bold">研究问题拆解</h1>
+      <ProjectContextBar />
 
       {/* Input */}
       <div className="sci-card-glow">
@@ -184,11 +210,18 @@ function ResearchDecompose() {
 
           {/* Action Buttons */}
           <div className="flex gap-3">
-            <button className="sci-btn-primary">
+            <button onClick={() => navigate('/paper/read')} className="sci-btn-primary">
               <BookOpen size={16} />
               跳转论文精读
             </button>
-            <button className="sci-btn-secondary">
+            <button
+              onClick={() => {
+                const params = new URLSearchParams({ objective: tree.core_question });
+                if (tree.id) params.set('questionId', tree.id);
+                navigate(`/experiment/roadmap?${params.toString()}`);
+              }}
+              className="sci-btn-secondary"
+            >
               <ArrowRight size={16} />
               生成实验方案
             </button>

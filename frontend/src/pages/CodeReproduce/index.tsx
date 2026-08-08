@@ -1,7 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Code2, Search, Folder, File, ChevronRight, ChevronDown, Copy, Check, Terminal, AlertCircle, Loader2 } from 'lucide-react';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
-import { mockAPI } from '@/services/api';
+import ProjectContextBar from '@/components/ProjectContextBar';
+import { codeAPI } from '@/services/api';
+import { getApiErrorMessage } from '@/services/errors';
+import { useAuthStore } from '@/store/authStore';
+import { useSelectedProjectId } from '@/store/projectStore';
 import { useUIStore } from '@/store/uiStore';
 import type { RepoFile } from '@/types';
 
@@ -50,12 +54,30 @@ function FileTreeItem({ file, depth }: { file: RepoFile; depth: number }) {
 }
 
 function CodeReproduce() {
+  const selectedProjectId = useSelectedProjectId();
+  const userId = useAuthStore((state) => state.user?.id || 'anonymous');
+  const storageKey = `scipilot-current-repository:${userId}${selectedProjectId ? `:${selectedProjectId}` : ''}`;
   const [repoUrl, setRepoUrl] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [reproduction, setReproduction] = useState<import('@/types').CodeReproduction | null>(null);
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
   const [errorLog, setErrorLog] = useState('');
+  const [isDiagnosing, setIsDiagnosing] = useState(false);
+  const [diagnosis, setDiagnosis] = useState('');
   const { addNotification } = useUIStore();
+
+  useEffect(() => {
+    setReproduction(null);
+    setDiagnosis('');
+    const artifactId = localStorage.getItem(storageKey);
+    if (!artifactId) return;
+    codeAPI.getRepoAnalysis(artifactId)
+      .then((response) => {
+        setReproduction(response.data);
+        setRepoUrl(response.data.repo_url);
+      })
+      .catch(() => localStorage.removeItem(storageKey));
+  }, [storageKey]);
 
   const handleAnalyze = async () => {
     if (!repoUrl.trim()) {
@@ -63,15 +85,21 @@ function CodeReproduce() {
       return;
     }
     setIsAnalyzing(true);
-
-    // TODO: Replace with actual API call
-    // const response = await codeAPI.analyzeRepo(repoUrl);
-
-    setTimeout(() => {
-      setReproduction(mockAPI.getMockCodeReproduction());
-      setIsAnalyzing(false);
+    setDiagnosis('');
+    try {
+      const response = await codeAPI.analyzeRepo(repoUrl.trim(), selectedProjectId);
+      setReproduction(response.data);
+      if (response.data.id) localStorage.setItem(storageKey, response.data.id);
       addNotification({ type: 'success', message: '仓库分析完成', duration: 3000 });
-    }, 2000);
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        message: getApiErrorMessage(error, '仓库分析失败，请检查 GitHub 地址或代码复现智能体配置'),
+        duration: 5000,
+      });
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   const copyCommand = (command: string) => {
@@ -80,17 +108,35 @@ function CodeReproduce() {
     setTimeout(() => setCopiedCommand(null), 2000);
   };
 
-  const handleDiagnose = () => {
+  const handleDiagnose = async () => {
     if (!errorLog.trim()) {
       addNotification({ type: 'warning', message: '请粘贴错误日志', duration: 3000 });
       return;
     }
-    addNotification({ type: 'info', message: '错误诊断功能开发中', duration: 3000 });
+    if (!reproduction?.id) {
+      addNotification({ type: 'warning', message: '请先完成仓库分析', duration: 3000 });
+      return;
+    }
+    setIsDiagnosing(true);
+    try {
+      const response = await codeAPI.diagnoseError(errorLog.trim(), reproduction.id);
+      setDiagnosis(response.data.diagnosis);
+      addNotification({ type: 'success', message: '错误诊断完成', duration: 3000 });
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        message: getApiErrorMessage(error, '错误诊断失败，请检查代码复现智能体配置'),
+        duration: 5000,
+      });
+    } finally {
+      setIsDiagnosing(false);
+    }
   };
 
   return (
     <div className="space-y-6 pb-20 md:pb-0">
       <h1 className="text-2xl font-bold">代码复现辅助</h1>
+      <ProjectContextBar />
 
       {/* Input */}
       <div className="sci-card-glow">
@@ -223,12 +269,19 @@ function CodeReproduce() {
               />
               <button
                 onClick={handleDiagnose}
+                disabled={isDiagnosing}
                 className="sci-btn-primary self-end"
               >
-                <Terminal size={16} />
-                诊断
+                {isDiagnosing ? <Loader2 size={16} className="animate-spin" /> : <Terminal size={16} />}
+                {isDiagnosing ? '诊断中' : '诊断'}
               </button>
             </div>
+            {diagnosis && (
+              <div className="mt-4 rounded-lg border border-sci-border bg-sci-bg3 p-4">
+                <h4 className="text-sm font-semibold mb-2">诊断结果</h4>
+                <p className="text-sm text-sci-muted whitespace-pre-wrap leading-relaxed">{diagnosis}</p>
+              </div>
+            )}
           </div>
         </div>
       )}

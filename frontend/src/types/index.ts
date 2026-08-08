@@ -18,6 +18,7 @@ export interface AuthState {
 // ==================== Paper Types ====================
 export interface Paper {
   id: string;
+  project_id?: string | null;
   title: string;
   authors: string[];
   abstract: string;
@@ -25,6 +26,27 @@ export interface Paper {
   arxiv_id?: string;
   uploaded_at: string;
   status: 'uploading' | 'processing' | 'completed' | 'error';
+  knowledge_sync?: PaperKnowledgeSync;
+}
+
+export type PaperKnowledgeSyncStatus =
+  | 'not_configured'
+  | 'unavailable'
+  | 'not_started'
+  | 'pending'
+  | 'uploaded'
+  | 'processing'
+  | 'vectored'
+  | 'failed';
+
+export interface PaperKnowledgeSync {
+  provider: 'xunfei-chatdoc' | string;
+  status: PaperKnowledgeSyncStatus;
+  error_message?: string | null;
+  attempt_count: number;
+  last_attempt_at?: string | null;
+  vectored_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface Citation {
@@ -44,6 +66,37 @@ export interface DeepReadReport {
   sections: ReportSection[];
 }
 
+export type ResearchJobStatus =
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled';
+
+export interface ResearchJob {
+  id: string;
+  project_id?: string | null;
+  paper_id?: string | null;
+  job_type: string;
+  status: ResearchJobStatus;
+  progress: number;
+  result?: Record<string, unknown>;
+  error_message?: string | null;
+  attempts: number;
+  max_attempts: number;
+  created_at: string;
+  updated_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface PaperUploadJob {
+  job_id: string;
+  paper_id: string;
+  status: ResearchJobStatus;
+  progress: number;
+}
+
 // ==================== Chat Types ====================
 export interface Message {
   id: string;
@@ -56,9 +109,12 @@ export interface Message {
 
 export interface Conversation {
   id: string;
+  project_id?: string | null;
   title: string;
   module: string;
   agent_id?: string;
+  status?: 'active' | 'archived';
+  context?: Record<string, unknown>;
   messages: Message[];
   created_at: string;
   updated_at: string;
@@ -75,8 +131,11 @@ export interface ResearchNode {
 }
 
 export interface ResearchTree {
+  id?: string;
+  project_id?: string | null;
   core_question: string;
   sub_questions: ResearchNode[];
+  generation_mode?: string;
 }
 
 // ==================== Experiment Types ====================
@@ -105,11 +164,14 @@ export interface Dataset {
 }
 
 export interface ExperimentRoadmap {
+  id?: string;
+  project_id?: string | null;
   objective: string;
   steps: ExperimentStep[];
   baselines: Baseline[];
   datasets: Dataset[];
   tools?: string[];
+  generation_mode?: string;
 }
 
 // ==================== Code Reproduction Types ====================
@@ -135,6 +197,8 @@ export interface ReproductionStep {
 }
 
 export interface CodeReproduction {
+  id?: string;
+  project_id?: string | null;
   repo_name: string;
   repo_url: string;
   language: string;
@@ -143,6 +207,7 @@ export interface CodeReproduction {
   file_tree: RepoFile[];
   dependencies: Dependency[];
   steps: ReproductionStep[];
+  generation_mode?: string;
 }
 
 // ==================== Result Analysis Types ====================
@@ -160,14 +225,86 @@ export interface StatsSummary {
   min: number;
   max: number;
   ci95: [number, number];
+  count?: number;
   p_value?: number;
 }
 
 export interface ResultAnalysis {
+  id?: string;
+  project_id?: string | null;
   charts: ChartData[];
   stats: StatsSummary[];
   interpretation: string;
   suggestions: string[];
+  row_count?: number;
+  generation_mode?: string;
+}
+
+// ==================== Research Project Types ====================
+export type ResearchProjectStatus = 'draft' | 'active' | 'completed' | 'archived';
+export type ResearchProjectStage =
+  | 'discovery'
+  | 'literature'
+  | 'question'
+  | 'experiment'
+  | 'reproduction'
+  | 'analysis'
+  | 'completed';
+
+export interface ResearchProject {
+  id: string;
+  user_id: string;
+  name: string;
+  objective?: string | null;
+  status: ResearchProjectStatus;
+  current_stage: ResearchProjectStage;
+  metadata?: Record<string, unknown>;
+  archived_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectAsset {
+  id: string;
+  title: string;
+  status: string;
+  project_id?: string | null;
+  module?: string;
+  artifact_type?: string;
+  uploaded_at?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ResearchProjectDetail extends ResearchProject {
+  assets: {
+    papers: ProjectAsset[];
+    conversations: ProjectAsset[];
+    artifacts: ProjectAsset[];
+  };
+  counts: {
+    papers: number;
+    conversations: number;
+    artifacts: number;
+  };
+  recent_activities: Array<{
+    id: string;
+    module: string;
+    action: string;
+    target: string;
+    created_at: string;
+  }>;
+}
+
+export interface UnassignedProjectAssets {
+  papers: ProjectAsset[];
+  conversations: ProjectAsset[];
+  artifacts: ProjectAsset[];
+  counts: {
+    papers: number;
+    conversations: number;
+    artifacts: number;
+  };
 }
 
 // ==================== Knowledge Graph Types ====================
@@ -201,6 +338,8 @@ export interface KnowledgeCitation {
   chunk_index?: number;
   file_name?: string | null;
   score?: number;
+  rerank_score?: number;
+  matched_queries?: string[];
   excerpt: string;
 }
 
@@ -228,6 +367,10 @@ export interface KnowledgeSearchResponse {
   citations: KnowledgeCitation[];
   total: number;
   provider: 'xunfei-chatdoc' | string;
+  retrieval_queries?: string[];
+  candidate_count?: number;
+  rerank_mode?: string;
+  retrieval_degraded?: boolean;
 }
 
 export interface KnowledgeAnswerResponse extends KnowledgeSearchResponse {

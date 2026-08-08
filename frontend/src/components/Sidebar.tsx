@@ -12,12 +12,14 @@ import {
   UserCircle,
   ChevronLeft,
   ChevronRight,
+  FolderKanban,
 } from 'lucide-react';
 import { useUIStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
 
 const navItems = [
   { path: '/dashboard', label: '仪表盘', icon: LayoutDashboard, module: 'dashboard' },
+  { path: '/projects', label: '科研项目', icon: FolderKanban, module: 'projects' },
   { path: '/paper/read', label: '论文精读', icon: FileText, module: 'paper' },
   { path: '/paper/library', label: '论文库', icon: BookOpen, module: 'library' },
   { path: '/knowledge', label: '知识库', icon: Database, module: 'knowledge' },

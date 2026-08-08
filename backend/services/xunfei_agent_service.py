@@ -3,201 +3,195 @@ import hashlib
 import hmac
 import json
 import os
-from pathlib import Path
 from email.utils import formatdate
-from urllib.parse import urlencode
+from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from dotenv import load_dotenv
-from websocket import create_connection
+from websocket import WebSocketTimeoutException, create_connection
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-XF_AGENT_APP_ID = os.getenv("XF_AGENT_APP_ID")
-XF_AGENT_API_KEY = os.getenv("XF_AGENT_API_KEY")
-XF_AGENT_API_SECRET = os.getenv("XF_AGENT_API_SECRET")
-XF_AGENT_ASSISTANT_ID = os.getenv("XF_AGENT_ASSISTANT_ID")
-
-XF_AGENT_WS_HOST = os.getenv(
-    "XF_AGENT_WS_HOST",
-    "spark-openapi.cn-huabei-1.xf-yun.com",
-)
-
-XF_AGENT_WS_PATH = os.getenv(
-    "XF_AGENT_WS_PATH",
-    "/v1/assistants/{assistant_id}",
-)
-
-XF_AGENT_DOMAIN = os.getenv("XF_AGENT_DOMAIN", "generalv3")
-XF_AGENT_TEMPERATURE = float(os.getenv("XF_AGENT_TEMPERATURE", "0.5"))
-XF_AGENT_TOP_K = int(os.getenv("XF_AGENT_TOP_K", "4"))
-XF_AGENT_MAX_TOKENS = int(os.getenv("XF_AGENT_MAX_TOKENS", "2028"))
-
-
-def _check_required_env():
-    missing = []
-
-    required = {
-        "XF_AGENT_APP_ID": XF_AGENT_APP_ID,
-        "XF_AGENT_API_KEY": XF_AGENT_API_KEY,
-        "XF_AGENT_API_SECRET": XF_AGENT_API_SECRET,
-        "XF_AGENT_ASSISTANT_ID": XF_AGENT_ASSISTANT_ID,
-    }
-
-    for key, value in required.items():
-        if not value:
-            missing.append(key)
-
-    if missing:
-        raise RuntimeError(
-            "Missing Xunfei Agent env vars: " + ", ".join(missing)
-        )
+AGENT_CONFIG_PREFIXES = {
+    "problem-decomposition": "PROBLEM_DECOMPOSITION",
+    "project-planning": "PROJECT_PLANNING",
+    "result-interpretation": "RESULT_INTERPRETATION",
+    "code-reproduction": "CODE_REPRODUCTION",
+}
 
 
 def _normalize_uid(user_id: str) -> str:
-    """
-    讯飞 uid 建议控制在 32 位以内。
-    Supabase user_id 是 UUID，这里去掉横线后截取前 32 位。
-    """
     if not user_id:
         return "anonymous_user"
-
     return user_id.replace("-", "")[:32]
 
 
-def build_xf_agent_ws_url() -> str:
-    """
-    生成讯飞星辰 Agent WebSocket 鉴权 URL。
-    """
+def _signed_ws_url(api_key: str, api_secret: str, ws_url: str) -> str:
+    parsed = urlsplit(ws_url)
+    if parsed.scheme not in {"ws", "wss"} or not parsed.netloc:
+        raise RuntimeError("Invalid Xunfei Agent WebSocket URL")
 
-    _check_required_env()
-
-    path = XF_AGENT_WS_PATH.replace("{assistant_id}", XF_AGENT_ASSISTANT_ID)
-
+    host = parsed.netloc
+    path = parsed.path or "/"
     date = formatdate(usegmt=True)
-
-    signature_origin = (
-        f"host: {XF_AGENT_WS_HOST}\n"
-        f"date: {date}\n"
-        f"GET {path} HTTP/1.1"
-    )
-
+    signature_origin = f"host: {host}\ndate: {date}\nGET {path} HTTP/1.1"
     signature_sha = hmac.new(
-        XF_AGENT_API_SECRET.encode("utf-8"),
+        api_secret.encode("utf-8"),
         signature_origin.encode("utf-8"),
         digestmod=hashlib.sha256,
     ).digest()
-
     signature = base64.b64encode(signature_sha).decode("utf-8")
-
     authorization_origin = (
-        f'api_key="{XF_AGENT_API_KEY}", '
-        f'algorithm="hmac-sha256", '
-        f'headers="host date request-line", '
+        f'api_key="{api_key}", '
+        'algorithm="hmac-sha256", '
+        'headers="host date request-line", '
         f'signature="{signature}"'
     )
-
     authorization = base64.b64encode(
         authorization_origin.encode("utf-8")
     ).decode("utf-8")
 
-    query = urlencode(
-        {
-            "authorization": authorization,
-            "date": date,
-            "host": XF_AGENT_WS_HOST,
-        }
+    query_items = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key not in {"authorization", "date", "host"}
+    ]
+    query_items.extend(
+        [
+            ("authorization", authorization),
+            ("date", date),
+            ("host", host),
+        ]
+    )
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, path, urlencode(query_items), "")
     )
 
-    return f"wss://{XF_AGENT_WS_HOST}{path}?{query}"
+
+def _paper_reading_ws_url() -> str:
+    assistant_id = os.getenv("XF_AGENT_ASSISTANT_ID", "").strip()
+    host = os.getenv(
+        "XF_AGENT_WS_HOST", "spark-openapi.cn-huabei-1.xf-yun.com"
+    ).strip()
+    path_template = os.getenv(
+        "XF_AGENT_WS_PATH", "/v1/assistants/{assistant_id}"
+    ).strip()
+    if not assistant_id:
+        raise RuntimeError("Missing Xunfei config for category: paper-reading")
+    path = path_template.replace("{assistant_id}", assistant_id)
+    if path.startswith("ws://") or path.startswith("wss://"):
+        return path
+    return f"wss://{host}{path if path.startswith('/') else '/' + path}"
 
 
-def call_paper_reading_agent(user_id: str, user_message: str) -> str:
-    """
-    调用讯飞星辰论文精读 Agent。
+def get_xunfei_agent_config(agent_category: str) -> dict[str, str]:
+    category = agent_category.strip().lower()
+    if category == "paper-reading":
+        config = {
+            "app_id": os.getenv("XF_AGENT_APP_ID", "").strip(),
+            "api_key": os.getenv("XF_AGENT_API_KEY", "").strip(),
+            "api_secret": os.getenv("XF_AGENT_API_SECRET", "").strip(),
+            "ws_url": _paper_reading_ws_url(),
+        }
+    else:
+        prefix = AGENT_CONFIG_PREFIXES.get(category)
+        if not prefix:
+            raise RuntimeError(f"Unsupported Xunfei agent category: {category}")
+        config = {
+            "app_id": os.getenv(f"{prefix}_APP_ID", "").strip(),
+            "api_key": os.getenv(f"{prefix}_API_KEY", "").strip(),
+            "api_secret": os.getenv(f"{prefix}_API_SECRET", "").strip(),
+            "ws_url": os.getenv(f"{prefix}_WS_URL", "").strip(),
+        }
 
-    当前版本：
-    - 后端接收讯飞的流式结果
-    - 后端拼接成完整文本
-    - 一次性返回给前端
-    """
+    if not all(config.values()):
+        raise RuntimeError(f"Missing Xunfei config for category: {category}")
+    return config
 
+
+def call_xunfei_agent_with_config(
+    user_id: str,
+    user_message: str,
+    app_id: str,
+    api_key: str,
+    api_secret: str,
+    ws_url: str,
+) -> str:
     if not user_message or not user_message.strip():
         raise ValueError("user_message cannot be empty")
+    if not all((app_id, api_key, api_secret, ws_url)):
+        raise RuntimeError("Incomplete Xunfei Agent configuration")
 
-    ws_url = build_xf_agent_ws_url()
-
+    signed_url = _signed_ws_url(api_key, api_secret, ws_url)
     request_payload = {
         "header": {
-            "app_id": XF_AGENT_APP_ID,
+            "app_id": app_id,
             "uid": _normalize_uid(user_id),
         },
         "parameter": {
             "chat": {
-                "domain": XF_AGENT_DOMAIN,
-                "temperature": XF_AGENT_TEMPERATURE,
-                "top_k": XF_AGENT_TOP_K,
-                "max_tokens": XF_AGENT_MAX_TOKENS,
+                "domain": os.getenv("XF_AGENT_DOMAIN", "generalv3"),
+                "temperature": float(os.getenv("XF_AGENT_TEMPERATURE", "0.5")),
+                "top_k": int(os.getenv("XF_AGENT_TOP_K", "4")),
+                "max_tokens": int(os.getenv("XF_AGENT_MAX_TOKENS", "2028")),
             }
         },
         "payload": {
             "message": {
-                "text": [
-                    {
-                        "role": "user",
-                        "content": user_message,
-                    }
-                ]
+                "text": [{"role": "user", "content": user_message.strip()}]
             }
         },
     }
 
-    answer_parts = []
+    answer_parts: list[str] = []
     websocket = None
-
     try:
-        websocket = create_connection(ws_url, timeout=60)
-
-        websocket.send(
-            json.dumps(
-                request_payload,
-                ensure_ascii=False,
-            )
-        )
+        websocket = create_connection(signed_url, timeout=30)
+        websocket.settimeout(120)
+        websocket.send(json.dumps(request_payload, ensure_ascii=False))
 
         while True:
             raw_message = websocket.recv()
             data = json.loads(raw_message)
-
             header = data.get("header", {})
             code = header.get("code", 0)
-
             if code != 0:
                 raise RuntimeError(
-                    f"Xunfei agent error: "
-                    f"code={code}, "
-                    f"message={header.get('message')}, "
-                    f"sid={header.get('sid')}"
+                    "Xunfei agent request failed "
+                    f"(code={code}, sid={header.get('sid')})"
                 )
 
             choices = data.get("payload", {}).get("choices", {})
-            text_list = choices.get("text", [])
-
-            for item in text_list:
-                answer_parts.append(item.get("content", ""))
-
-            header_status = header.get("status")
-            choices_status = choices.get("status")
-
-            if header_status == 2 or choices_status == 2:
+            for item in choices.get("text", []):
+                answer_parts.append(str(item.get("content") or ""))
+            if header.get("status") == 2 or choices.get("status") == 2:
                 break
-
+    except WebSocketTimeoutException:
+        raise RuntimeError("Xunfei agent response timeout") from None
     finally:
-        if websocket:
+        if websocket is not None:
             websocket.close()
 
     reply = "".join(answer_parts).strip()
-
     if not reply:
         raise RuntimeError("Xunfei agent returned empty reply")
-
     return reply
+
+
+def call_xunfei_agent_by_category(
+    user_id: str, user_message: str, agent_category: str
+) -> str:
+    config = get_xunfei_agent_config(agent_category)
+    return call_xunfei_agent_with_config(
+        user_id=user_id,
+        user_message=user_message,
+        **config,
+    )
+
+
+def call_paper_reading_agent(user_id: str, user_message: str) -> str:
+    return call_xunfei_agent_by_category(
+        user_id=user_id,
+        user_message=user_message,
+        agent_category="paper-reading",
+    )

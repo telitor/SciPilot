@@ -1,0 +1,41 @@
+[
+  {
+    "name": "defect-prediction-metrics",
+    "query": "这些论文中，软件缺陷预测常用哪些评价指标？",
+    "relevant_ids": ["metrics:0"],
+    "original": [
+      ["overview:0", "软件缺陷预测综述", "本文概述了缺陷预测任务。", 0.91],
+      ["metrics:0", "缺陷预测评价", "常用评价指标包括 F1、AUC、精确率和召回率。", 0.82]
+    ],
+    "rewritten": [
+      ["metrics:0", "缺陷预测评价", "常用评价指标包括 F1、AUC、精确率和召回率。", 0.88],
+      ["dataset:0", "缺陷数据集", "实验采用 NASA 数据集。", 0.73]
+    ]
+  },
+  {
+    "name": "paper-core-algorithm",
+    "query": "请问这篇论文主要运用了什么算法？",
+    "relevant_ids": ["method:2"],
+    "original": [
+      ["intro:0", "研究背景", "本文研究复杂网络中的分类问题。", 0.92],
+      ["method:2", "核心方法", "模型使用图卷积网络和注意力机制。", 0.80]
+    ],
+    "rewritten": [
+      ["method:2", "核心方法", "模型使用图卷积网络和注意力机制。", 0.90],
+      ["experiment:1", "实验设置", "训练使用 Adam 优化器。", 0.76]
+    ]
+  },
+  {
+    "name": "paper-limitations",
+    "query": "这篇论文有哪些不足？",
+    "relevant_ids": ["limitations:0"],
+    "original": [
+      ["conclusion:0", "结论", "方法在三个数据集上取得提升。", 0.89],
+      ["limitations:0", "局限性", "样本规模较小，跨项目泛化能力仍需验证。", 0.78]
+    ],
+    "rewritten": [
+      ["limitations:0", "局限性", "样本规模较小，跨项目泛化能力仍需验证。", 0.87],
+      ["future:0", "未来工作", "后续将扩展到更多项目。", 0.74]
+    ]
+  }
+]

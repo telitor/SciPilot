@@ -12,8 +12,11 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import os
+import re
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
@@ -27,7 +30,57 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 PROVIDER_NAME = "xunfei-chatdoc"
 DEFAULT_BASE_URL = "https://chatdoc.xfyun.cn"
+MAX_FILE_BYTES = 20 * 1024 * 1024
 RETRIEVAL_FILTER_POLICIES = frozenset({"STRICT", "REGULAR", "LENIENT", "OFF"})
+QUERY_REWRITE_NOISE = (
+    "请问",
+    "请帮我",
+    "帮我",
+    "能否",
+    "可以",
+    "这些论文中",
+    "这篇论文中",
+    "这篇论文",
+    "本文中",
+    "论文中",
+)
+QUERY_REWRITE_PHRASES = (
+    ("主要运用了什么算法", "核心算法 方法 模型"),
+    ("主要使用了什么算法", "核心算法 方法 模型"),
+    ("使用了哪些算法", "算法 方法 模型"),
+    ("有什么创新点", "创新点 主要贡献"),
+    ("有哪些创新点", "创新点 主要贡献"),
+    ("实验结果怎么样", "实验结果 评价指标 对比"),
+    ("有哪些不足", "局限性 不足"),
+    ("有什么不足", "局限性 不足"),
+    ("常用哪些", "常用"),
+    ("分别是什么", ""),
+    ("是什么", ""),
+)
+LEXICAL_STOP_TOKENS = frozenset(
+    {
+        "什么",
+        "哪些",
+        "怎么",
+        "如何",
+        "论文",
+        "本文",
+        "这个",
+        "这些",
+        "其中",
+        "主要",
+        "进行",
+        "研究",
+        "please",
+        "what",
+        "which",
+        "how",
+        "the",
+        "this",
+        "that",
+        "paper",
+    }
+)
 
 
 class XunfeiKnowledgeBaseError(RuntimeError):
@@ -139,6 +192,153 @@ def _safe_env_int(name: str, default: int) -> int:
         ) from None
 
 
+def _safe_env_bool(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise XunfeiKnowledgeBaseError(
+        f"星火知识库配置 {name} 必须是 true 或 false"
+    )
+
+
+def _normalized_query_text(message: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", str(message or "")).split()).strip()
+
+
+def _rewritten_keyword_query(message: str) -> str:
+    rewritten = _normalized_query_text(message)
+    for phrase in QUERY_REWRITE_NOISE:
+        rewritten = rewritten.replace(phrase, " ")
+    for phrase, replacement in QUERY_REWRITE_PHRASES:
+        rewritten = rewritten.replace(phrase, f" {replacement} ")
+    rewritten = re.sub(r"[?？!！,，。；;：:\n\r\t]+", " ", rewritten)
+    rewritten = re.sub(r"\s+", " ", rewritten).strip()
+    return rewritten
+
+
+def build_retrieval_queries(
+    message: str,
+    *,
+    max_queries: int | None = None,
+) -> list[str]:
+    """Build a bounded, deterministic query plan without another model call."""
+
+    original = _normalized_query_text(message)
+    if not original:
+        raise ValueError("message 不能为空")
+    if not _safe_env_bool("XFYUN_KB_QUERY_REWRITE_ENABLED", True):
+        return [original]
+
+    resolved_limit = (
+        max_queries
+        if max_queries is not None
+        else _safe_env_int("XFYUN_KB_MAX_QUERY_VARIANTS", 2)
+    )
+    if isinstance(resolved_limit, bool) or not 1 <= resolved_limit <= 2:
+        raise XunfeiKnowledgeBaseError(
+            "星火知识库配置 XFYUN_KB_MAX_QUERY_VARIANTS 必须是 1 或 2"
+        )
+
+    queries = [original]
+    rewritten = _rewritten_keyword_query(original)
+    if rewritten and rewritten.casefold() != original.casefold():
+        queries.append(rewritten)
+    return queries[:resolved_limit]
+
+
+def _lexical_tokens(text: str) -> set[str]:
+    normalized = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    tokens: set[str] = set()
+    for word in re.findall(r"[a-z0-9][a-z0-9_.+-]*", normalized):
+        if len(word) > 1 and word not in LEXICAL_STOP_TOKENS:
+            tokens.add(word)
+    for sequence in re.findall(r"[\u4e00-\u9fff]+", normalized):
+        if sequence not in LEXICAL_STOP_TOKENS and len(sequence) <= 10:
+            tokens.add(sequence)
+        for index in range(max(0, len(sequence) - 1)):
+            token = sequence[index : index + 2]
+            if token not in LEXICAL_STOP_TOKENS:
+                tokens.add(token)
+    return tokens
+
+
+def _citation_identity(citation: Mapping[str, Any]) -> str:
+    chunk_id = str(citation.get("chunk_id") or "").strip()
+    if chunk_id:
+        return chunk_id
+    return ":".join(
+        (
+            str(citation.get("document_id") or "unknown"),
+            str(citation.get("chunk_index") or "0"),
+        )
+    )
+
+
+def rerank_retrieval_candidates(
+    query_results: Sequence[tuple[str, Sequence[Mapping[str, Any]]]],
+    *,
+    top_n: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Fuse provider rankings with RRF and a small lexical relevance signal."""
+
+    _validated_top_n(top_n)
+    query_tokens = set().union(*(_lexical_tokens(query) for query, _ in query_results))
+    candidates: dict[str, dict[str, Any]] = {}
+    for query_index, (query, citations) in enumerate(query_results):
+        query_weight = 1.0 if query_index == 0 else 0.85
+        for rank, citation in enumerate(citations, start=1):
+            identity = _citation_identity(citation)
+            entry = candidates.setdefault(
+                identity,
+                {
+                    "citation": dict(citation),
+                    "rrf_score": 0.0,
+                    "matched_queries": [],
+                },
+            )
+            entry["rrf_score"] += query_weight / (60.0 + rank)
+            if query not in entry["matched_queries"]:
+                entry["matched_queries"].append(query)
+
+    ranked: list[dict[str, Any]] = []
+    for entry in candidates.values():
+        citation = entry["citation"]
+        evidence_tokens = _lexical_tokens(
+            f"{citation.get('title') or ''} {citation.get('excerpt') or ''}"
+        )
+        overlap = len(query_tokens & evidence_tokens)
+        lexical_score = (
+            overlap / math.sqrt(max(1, len(query_tokens) * len(evidence_tokens)))
+            if query_tokens and evidence_tokens
+            else 0.0
+        )
+        rerank_score = float(entry["rrf_score"]) + lexical_score * 0.03
+        ranked.append(
+            {
+                **citation,
+                "matched_queries": entry["matched_queries"],
+                "rerank_score": round(rerank_score, 8),
+            }
+        )
+
+    ranked.sort(
+        key=lambda citation: (
+            float(citation.get("rerank_score") or 0.0),
+            float(citation.get("score") or 0.0),
+        ),
+        reverse=True,
+    )
+    selected = ranked[:top_n]
+    for index, citation in enumerate(selected, start=1):
+        citation["index"] = index
+    return selected, len(ranked)
+
+
 def _env_filter_policy() -> str:
     try:
         return _validated_filter_policy(
@@ -244,6 +444,56 @@ class XunfeiKnowledgeBaseClient:
             operation=operation,
             headers=headers,
             files=files,
+        )
+
+    def upload_file(
+        self,
+        file_name: str,
+        content: bytes,
+        *,
+        mime_type: str = "application/pdf",
+    ) -> dict[str, Any]:
+        safe_name = Path(file_name).name
+        if not safe_name.lower().endswith(".pdf"):
+            raise ValueError("星火知识库当前只接收 PDF 论文")
+        if not content:
+            raise ValueError("上传到星火知识库的文件不能为空")
+        if len(content) > MAX_FILE_BYTES:
+            raise ValueError("星火知识库单个 PDF 不能超过 20MB")
+
+        multipart = [
+            ("file", (safe_name, content, mime_type)),
+            ("repoIds", (None, self.settings.repo_id)),
+            ("parseType", (None, "AUTO")),
+            ("stepByStep", (None, "false")),
+            ("needSummary", (None, "false")),
+        ]
+        return self._post(
+            "/openapi/v1/file/upload",
+            operation="文件上传",
+            headers={**self.auth_headers(), "Accept": "application/json"},
+            files=multipart,
+        )
+
+    def file_status(self, file_ids: Sequence[str]) -> list[dict[str, Any]]:
+        ids = _validated_file_ids(file_ids)
+        payload = self._post_form(
+            "/openapi/v1/file/status",
+            {"fileIds": ",".join(ids)},
+            operation="文件状态查询",
+        )
+        items = _payload_items(payload)
+        data = payload.get("data")
+        if not items and isinstance(data, Mapping):
+            items = [dict(data)]
+        return items
+
+    def delete_files(self, file_ids: Sequence[str]) -> None:
+        ids = _validated_file_ids(file_ids)
+        self._post_form(
+            "/openapi/v1/file/del",
+            {"fileIds": ",".join(ids)},
+            operation="文件删除",
         )
 
     def _post(
@@ -455,14 +705,14 @@ class XunfeiKnowledgeBaseClient:
         *,
         top_n: int = 6,
         retrieval_filter_policy: str = "REGULAR",
+        file_ids: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         content = str(message or "").strip()
         if not content:
             raise ValueError("message 不能为空")
         _validated_top_n(top_n)
         policy = _validated_filter_policy(retrieval_filter_policy)
-        return {
-            "repoIds": [self.settings.repo_id],
+        request = {
             "topN": top_n,
             "esTopN": top_n,
             "content": content,
@@ -471,6 +721,11 @@ class XunfeiKnowledgeBaseClient:
             "reRank": True,
             "chatExtends": {"retrievalFilterPolicy": policy},
         }
+        if file_ids is not None:
+            request["fileIds"] = _validated_file_ids(file_ids)
+        else:
+            request["repoIds"] = [self.settings.repo_id]
+        return request
 
     def vector_search(
         self,
@@ -478,11 +733,13 @@ class XunfeiKnowledgeBaseClient:
         top_n: int = 6,
         *,
         retrieval_filter_policy: str = "REGULAR",
+        file_ids: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
         request_body = self.build_vector_search_request(
             message,
             top_n=top_n,
             retrieval_filter_policy=retrieval_filter_policy,
+            file_ids=file_ids,
         )
         payload = self._post_json(
             "/openapi/v1/vector/search",
@@ -560,6 +817,15 @@ def _payload_items(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
             if isinstance(items, list):
                 return [dict(item) for item in items if isinstance(item, Mapping)]
     return []
+
+
+def _validated_file_ids(file_ids: Sequence[str]) -> list[str]:
+    values = [str(file_id).strip() for file_id in file_ids if str(file_id).strip()]
+    if not values:
+        raise ValueError("file_ids 不能为空")
+    if len(values) > 20:
+        raise ValueError("file_ids 一次不能超过 20 个")
+    return values
 
 
 def _payload_total(payload: Mapping[str, Any]) -> int | None:
@@ -736,12 +1002,31 @@ def search_xunfei_knowledge_base(
     message: str,
     *,
     top_n: int | None = None,
+    file_ids: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Retrieve ChatDoc evidence and return the public citation contract."""
+    """Retrieve and locally rerank ChatDoc evidence for legacy callers."""
+
+    return retrieve_xunfei_knowledge_base(
+        message,
+        top_n=top_n,
+        file_ids=file_ids,
+    )["citations"]
+
+
+def retrieve_xunfei_knowledge_base(
+    message: str,
+    *,
+    top_n: int | None = None,
+    file_ids: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Run bounded multi-query retrieval and return evidence plus diagnostics."""
 
     client = XunfeiKnowledgeBaseClient.from_env()
     resolved_top_n = top_n if top_n is not None else _safe_env_int("XFYUN_KB_TOP_N", 6)
+    _validated_top_n(resolved_top_n)
     policy = _env_filter_policy()
+    queries = build_retrieval_queries(message)
+    candidate_top_n = min(20, max(resolved_top_n, resolved_top_n * 2))
 
     # File names are metadata only.  If listing is temporarily unavailable,
     # retrieval still proceeds and citations fall back to the ChatDoc file ID.
@@ -749,11 +1034,82 @@ def search_xunfei_knowledge_base(
         client.repo_files(page=1, page_size=100)
     except XunfeiKnowledgeBaseError:
         pass
-    return client.vector_search(
-        message,
-        resolved_top_n,
-        retrieval_filter_policy=policy,
+    query_results: list[tuple[str, list[dict[str, Any]]]] = []
+    degraded = False
+    for query_index, query in enumerate(queries):
+        try:
+            citations = client.vector_search(
+                query,
+                candidate_top_n,
+                retrieval_filter_policy=policy,
+                file_ids=file_ids,
+            )
+        except XunfeiKnowledgeBaseError:
+            if query_index == 0:
+                raise
+            degraded = True
+            continue
+        query_results.append((query, citations))
+
+    citations, candidate_count = rerank_retrieval_candidates(
+        query_results,
+        top_n=resolved_top_n,
     )
+    return {
+        "query": queries[0],
+        "retrieval_queries": [query for query, _ in query_results],
+        "citations": citations,
+        "candidate_count": candidate_count,
+        "rerank_mode": "rrf-lexical-v1",
+        "degraded": degraded,
+    }
+
+
+def upload_xunfei_knowledge_file(
+    file_name: str,
+    content: bytes,
+    *,
+    mime_type: str = "application/pdf",
+) -> dict[str, Any]:
+    client = XunfeiKnowledgeBaseClient.from_env()
+    payload = client.upload_file(file_name, content, mime_type=mime_type)
+    data = payload.get("data")
+    if isinstance(data, Mapping):
+        file_id = str(data.get("fileId") or data.get("file_id") or "").strip()
+    else:
+        file_id = str(data or "").strip()
+    if not file_id:
+        raise XunfeiKnowledgeBaseError("星火知识库文件上传未返回 fileId")
+    return {
+        "file_id": file_id,
+        "sid": str(payload.get("sid") or "").strip() or None,
+        "status": "uploaded",
+        "repository_id": client.settings.repo_id,
+    }
+
+
+def get_xunfei_knowledge_file_status(file_id: str) -> str:
+    client = XunfeiKnowledgeBaseClient.from_env()
+    items = client.file_status([file_id])
+    item = next(
+        (
+            entry
+            for entry in items
+            if str(entry.get("fileId") or entry.get("file_id") or "").strip()
+            == file_id.strip()
+        ),
+        items[0] if items else None,
+    )
+    if not isinstance(item, Mapping):
+        raise XunfeiKnowledgeBaseError("星火知识库未返回文件状态")
+    status = str(item.get("fileStatus") or item.get("status") or "").strip().lower()
+    if not status:
+        raise XunfeiKnowledgeBaseError("星火知识库返回了无效文件状态")
+    return status
+
+
+def delete_xunfei_knowledge_file(file_id: str) -> None:
+    XunfeiKnowledgeBaseClient.from_env().delete_files([file_id])
 
 
 def ask_xunfei_knowledge_base(

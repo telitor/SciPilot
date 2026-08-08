@@ -10,13 +10,20 @@ import {
 } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
-import { mockAPI } from '@/services/api';
+import ProjectContextBar from '@/components/ProjectContextBar';
+import { resultAPI } from '@/services/api';
+import { getApiErrorMessage } from '@/services/errors';
+import { useAuthStore } from '@/store/authStore';
+import { useSelectedProjectId } from '@/store/projectStore';
 import { useUIStore } from '@/store/uiStore';
 
 // Register ECharts modules manually to avoid window.echarts dependency
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
 
 function ResultAnalyze() {
+  const selectedProjectId = useSelectedProjectId();
+  const userId = useAuthStore((state) => state.user?.id || 'anonymous');
+  const storageKey = `scipilot-current-result-analysis:${userId}${selectedProjectId ? `:${selectedProjectId}` : ''}`;
   const [file, setFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<import('@/types').ResultAnalysis | null>(null);
@@ -30,11 +37,21 @@ function ResultAnalyze() {
     return () => clearTimeout(timer);
   }, []);
 
+  useEffect(() => {
+    setAnalysis(null);
+    const artifactId = localStorage.getItem(storageKey);
+    if (!artifactId) return;
+    resultAPI.getAnalysis(artifactId)
+      .then((response) => setAnalysis(response.data))
+      .catch(() => localStorage.removeItem(storageKey));
+  }, [storageKey]);
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFile = e.target.files?.[0];
     if (!uploadedFile) return;
     const validTypes = ['text/csv', 'application/json', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
-    if (!validTypes.includes(uploadedFile.type) && !uploadedFile.name.endsWith('.csv')) {
+    const lowerName = uploadedFile.name.toLowerCase();
+    if (!validTypes.includes(uploadedFile.type) && !['.csv', '.json', '.xlsx'].some((ext) => lowerName.endsWith(ext))) {
       addNotification({ type: 'warning', message: '请上传 CSV/JSON/Excel 文件', duration: 3000 });
       return;
     }
@@ -47,36 +64,44 @@ function ResultAnalyze() {
       return;
     }
     setIsAnalyzing(true);
-
-    // TODO: Replace with actual API call
-    setTimeout(() => {
-      setAnalysis(mockAPI.getMockResultAnalysis());
-      setIsAnalyzing(false);
+    try {
+      const response = await resultAPI.analyze(file, undefined, selectedProjectId);
+      setAnalysis(response.data);
+      if (response.data.id) localStorage.setItem(storageKey, response.data.id);
       setChartReady(true);
       addNotification({ type: 'success', message: '数据分析完成', duration: 3000 });
-    }, 2000);
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        message: getApiErrorMessage(error, '数据分析失败，请检查文件内容或结果分析智能体配置'),
+        duration: 5000,
+      });
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   const barChartOption = useMemo(() => {
-    if (!chartReady) return null;
+    if (!chartReady || !analysis?.stats.length) return null;
+    const labels = analysis.stats.map((item) => item.metric);
+    const values = analysis.stats.map((item) => item.mean);
     return {
       backgroundColor: 'transparent',
       grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
       xAxis: {
         type: 'category' as const,
-        data: ['FA-AST', 'GraphCodeBERT', 'Our Method'],
+        data: labels,
         axisLine: { lineStyle: { color: '#334155' } },
         axisLabel: { color: '#94a3b8' },
       },
       yAxis: {
         type: 'value' as const,
-        max: 1,
         axisLine: { lineStyle: { color: '#334155' } },
         axisLabel: { color: '#94a3b8' },
         splitLine: { lineStyle: { color: '#1e293b' } },
       },
       series: [{
-        data: [0.82, 0.85, 0.91],
+        data: values,
         type: 'bar' as const,
         itemStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -94,17 +119,17 @@ function ResultAnalyze() {
         textStyle: { color: '#f1f5f9' },
       },
     };
-  }, [chartReady]);
+  }, [analysis, chartReady]);
 
   const lineChartOption = useMemo(() => {
-    if (!chartReady) return null;
+    if (!chartReady || !analysis?.stats.length) return null;
+    const labels = analysis.stats.map((item) => item.metric);
     return {
       backgroundColor: 'transparent',
       grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
       xAxis: {
         type: 'category' as const,
-        data: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-        name: 'Epoch',
+        data: labels,
         axisLine: { lineStyle: { color: '#334155' } },
         axisLabel: { color: '#94a3b8' },
       },
@@ -116,8 +141,8 @@ function ResultAnalyze() {
       },
       series: [
         {
-          name: 'Train Loss',
-          data: [0.85, 0.72, 0.61, 0.52, 0.45, 0.40, 0.36, 0.33, 0.31, 0.29],
+          name: '最小值',
+          data: analysis.stats.map((item) => item.min),
           type: 'line' as const,
           smooth: true,
           lineStyle: { color: '#38bdf8', width: 2 },
@@ -130,16 +155,24 @@ function ResultAnalyze() {
           },
         },
         {
-          name: 'Val Loss',
-          data: [0.88, 0.75, 0.65, 0.58, 0.52, 0.49, 0.47, 0.46, 0.46, 0.47],
+          name: '均值',
+          data: analysis.stats.map((item) => item.mean),
           type: 'line' as const,
           smooth: true,
           lineStyle: { color: '#f59e0b', width: 2 },
           itemStyle: { color: '#f59e0b' },
         },
+        {
+          name: '最大值',
+          data: analysis.stats.map((item) => item.max),
+          type: 'line' as const,
+          smooth: true,
+          lineStyle: { color: '#22c55e', width: 2 },
+          itemStyle: { color: '#22c55e' },
+        },
       ],
       legend: {
-        data: ['Train Loss', 'Val Loss'],
+        data: ['最小值', '均值', '最大值'],
         textStyle: { color: '#94a3b8' },
         bottom: 0,
       },
@@ -150,11 +183,12 @@ function ResultAnalyze() {
         textStyle: { color: '#f1f5f9' },
       },
     };
-  }, [chartReady]);
+  }, [analysis, chartReady]);
 
   return (
     <div className="space-y-6 pb-20 md:pb-0">
       <h1 className="text-2xl font-bold">结果分析</h1>
+      <ProjectContextBar />
 
       {/* Upload */}
       <div className="sci-card-glow">
@@ -214,7 +248,7 @@ function ResultAnalyze() {
             <h2 className="sci-section-title mb-4">图表分析</h2>
             <div className="grid md:grid-cols-2 gap-4">
               <div className="sci-card">
-                <h3 className="text-sm font-medium text-sci-muted mb-4">各模型 F1 分数对比</h3>
+                <h3 className="text-sm font-medium text-sci-muted mb-4">各数值字段均值</h3>
                 {barChartOption ? (
                   <ReactECharts option={barChartOption} style={{ height: 250 }} />
                 ) : (
@@ -224,7 +258,7 @@ function ResultAnalyze() {
                 )}
               </div>
               <div className="sci-card">
-                <h3 className="text-sm font-medium text-sci-muted mb-4">训练损失曲线</h3>
+                <h3 className="text-sm font-medium text-sci-muted mb-4">各字段范围与均值</h3>
                 {lineChartOption ? (
                   <ReactECharts option={lineChartOption} style={{ height: 250 }} />
                 ) : (
@@ -244,7 +278,9 @@ function ResultAnalyze() {
                 <div key={stat.metric} className="sci-card">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="font-semibold">{stat.metric}</h3>
-                    <span className="text-xs text-sci-muted">p = {stat.p_value}</span>
+                    {typeof stat.p_value === 'number' && (
+                      <span className="text-xs text-sci-muted">p = {stat.p_value}</span>
+                    )}
                   </div>
                   <div className="text-3xl font-bold sci-glow-text mb-3">
                     {stat.mean.toFixed(3)}

@@ -9,7 +9,18 @@ import type {
   KnowledgeAnswerResponse,
   KnowledgeSearchResponse,
   ModelChatMessage,
+  PaperKnowledgeSync,
+  PaperUploadJob,
   PublicAgent,
+  ResearchTree,
+  ExperimentRoadmap,
+  CodeReproduction,
+  ResultAnalysis,
+  ResearchProject,
+  ResearchProjectDetail,
+  ResearchProjectStage,
+  ResearchJob,
+  UnassignedProjectAssets,
 } from '@/types';
 
 // ==================== Axios Instance ====================
@@ -70,11 +81,12 @@ export const authAPI = {
 
 // ---- Papers ----
 export const paperAPI = {
-  upload: (file: File, onProgress?: (progress: number) => void) => {
+  uploadAsync: (file: File, onProgress?: (progress: number) => void, projectId?: string | null) => {
     const formData = new FormData();
     formData.append('file', file);
-    return apiClient.post('/papers/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+    if (projectId) formData.append('project_id', projectId);
+    return apiClient.post<PaperUploadJob>('/papers/upload-async', formData, {
+      timeout: 60000,
       onUploadProgress: (progressEvent) => {
         if (onProgress && progressEvent.total) {
           onProgress(Math.round((progressEvent.loaded * 100) / progressEvent.total));
@@ -83,61 +95,102 @@ export const paperAPI = {
     });
   },
 
-  getPapers: (params?: { page?: number; limit?: number; search?: string }) =>
+  upload: (file: File, onProgress?: (progress: number) => void, projectId?: string | null) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (projectId) formData.append('project_id', projectId);
+    return apiClient.post('/papers/upload', formData, {
+      timeout: 180000,
+      onUploadProgress: (progressEvent) => {
+        if (onProgress && progressEvent.total) {
+          onProgress(Math.round((progressEvent.loaded * 100) / progressEvent.total));
+        }
+      },
+    });
+  },
+
+  getPapers: (params?: { page?: number; limit?: number; search?: string; project_id?: string; unassigned?: boolean }) =>
     apiClient.get('/papers', { params }),
 
   getPaper: (id: string) => apiClient.get(`/papers/${id}`),
 
   getDeepRead: (id: string) => apiClient.get(`/papers/${id}/deep-read`),
 
-  deletePaper: (id: string) => apiClient.delete(`/papers/${id}`),
+  getKnowledgeSync: (id: string) =>
+    apiClient.get<PaperKnowledgeSync>(`/papers/${id}/knowledge-sync`),
 
-  // TODO: Implement WebSocket connection for streaming
-  connectPaperChat: (paperId: string) => {
-    const wsUrl = `${import.meta.env.VITE_WS_URL}/papers/${paperId}/chat`;
-    return new WebSocket(wsUrl);
-  },
+  retryKnowledgeSync: (id: string) =>
+    apiClient.post<PaperKnowledgeSync>(`/papers/${id}/knowledge-sync`, undefined, {
+      timeout: 180000,
+    }),
+
+  deletePaper: (id: string) => apiClient.delete(`/papers/${id}`),
 };
 
 // ---- Research ----
 export const researchAPI = {
-  decompose: (direction: string) =>
-    apiClient.post('/research/decompose', { direction }),
+  decompose: (direction: string, projectId?: string | null) =>
+    apiClient.post<ResearchTree>(
+      '/research/decompose',
+      { direction, project_id: projectId || undefined },
+      { timeout: 150000 },
+    ),
 
-  getResearchTree: (id: string) => apiClient.get(`/research/${id}`),
+  getResearchTree: (id: string) => apiClient.get<ResearchTree>(`/research/${id}`),
+};
+
+// ---- Durable research jobs ----
+export const researchJobAPI = {
+  get: (jobId: string) => apiClient.get<ResearchJob>(`/jobs/${jobId}`),
+
+  list: (params?: { job_type?: string; project_id?: string; limit?: number }) =>
+    apiClient.get<{ items: ResearchJob[] }>('/jobs', { params }),
+
+  retry: (jobId: string) => apiClient.post<ResearchJob>(`/jobs/${jobId}/retry`),
 };
 
 // ---- Experiment ----
 export const experimentAPI = {
-  generateRoadmap: (questionId: string) =>
-    apiClient.post('/experiments/generate-roadmap', { question_id: questionId }),
+  generateRoadmap: (questionId: string, objective?: string, projectId?: string | null) =>
+    apiClient.post<ExperimentRoadmap>(
+      '/experiments/generate-roadmap',
+      { question_id: questionId, objective, project_id: projectId || undefined },
+      { timeout: 150000 },
+    ),
 
-  getRoadmap: (id: string) => apiClient.get(`/experiments/${id}`),
+  getRoadmap: (id: string) => apiClient.get<ExperimentRoadmap>(`/experiments/${id}`),
 };
 
 // ---- Code Reproduction ----
 export const codeAPI = {
-  analyzeRepo: (repoUrl: string) =>
-    apiClient.post('/code/analyze-repo', { repo_url: repoUrl }),
+  analyzeRepo: (repoUrl: string, projectId?: string | null) =>
+    apiClient.post<CodeReproduction>(
+      '/code/analyze-repo',
+      { repo_url: repoUrl, project_id: projectId || undefined },
+      { timeout: 150000 },
+    ),
 
-  getRepoAnalysis: (id: string) => apiClient.get(`/code/${id}`),
+  getRepoAnalysis: (id: string) => apiClient.get<CodeReproduction>(`/code/${id}`),
 
   diagnoseError: (errorLog: string, repoId: string) =>
-    apiClient.post('/code/diagnose', { error_log: errorLog, repo_id: repoId }),
+    apiClient.post<{ diagnosis: string; error_excerpt: string }>(
+      '/code/diagnose',
+      { error_log: errorLog, repo_id: repoId },
+      { timeout: 150000 },
+    ),
 };
 
 // ---- Result Analysis ----
 export const resultAPI = {
-  analyze: (file: File, config?: Record<string, unknown>) => {
+  analyze: (file: File, config?: Record<string, unknown>, projectId?: string | null) => {
     const formData = new FormData();
     formData.append('file', file);
     if (config) formData.append('config', JSON.stringify(config));
-    return apiClient.post('/results/analyze', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    if (projectId) formData.append('project_id', projectId);
+    return apiClient.post<ResultAnalysis>('/results/analyze', formData, { timeout: 150000 });
   },
 
-  getAnalysis: (id: string) => apiClient.get(`/results/${id}`),
+  getAnalysis: (id: string) => apiClient.get<ResultAnalysis>(`/results/${id}`),
 };
 
 // ---- Knowledge Graph ----
@@ -186,6 +239,40 @@ export const dashboardAPI = {
   getSummary: () => apiClient.get('/dashboard/summary'),
 };
 
+// ---- Unified Research Projects ----
+export const projectAPI = {
+  getProjects: (includeArchived = false) =>
+    apiClient.get<{ items: ResearchProject[]; total: number }>('/projects', {
+      params: { include_archived: includeArchived },
+    }),
+
+  createProject: (data: { name: string; objective?: string; current_stage?: ResearchProjectStage }) =>
+    apiClient.post<ResearchProject>('/projects', data),
+
+  getProject: (id: string) =>
+    apiClient.get<ResearchProjectDetail>(`/projects/${id}`),
+
+  updateProject: (
+    id: string,
+    data: Partial<Pick<ResearchProject, 'name' | 'objective' | 'status' | 'current_stage'>>,
+  ) => apiClient.patch<ResearchProject>(`/projects/${id}`, data),
+
+  archiveProject: (id: string) =>
+    apiClient.post<ResearchProject>(`/projects/${id}/archive`),
+
+  restoreProject: (id: string) =>
+    apiClient.post<ResearchProject>(`/projects/${id}/restore`),
+
+  getUnassignedAssets: () =>
+    apiClient.get<UnassignedProjectAssets>('/projects/unassigned-assets'),
+
+  assignAsset: (
+    assetType: 'paper' | 'conversation' | 'artifact',
+    assetId: string,
+    projectId: string | null,
+  ) => apiClient.patch(`/project-assets/${assetType}/${assetId}`, { project_id: projectId }),
+};
+
 export const resourceAPI = {
   getResources: (params?: { resource_type?: string; topic?: string; limit?: number }) =>
     apiClient.get('/resources', { params }),
@@ -193,18 +280,33 @@ export const resourceAPI = {
 
 // ---- Conversations ----
 export const conversationAPI = {
-  getConversations: (params?: { module?: string; page?: number; limit?: number }) =>
+  getConversations: (params?: {
+    module?: string;
+    project_id?: string;
+    unassigned?: boolean;
+    page?: number;
+    limit?: number;
+  }) =>
     apiClient.get('/conversations', { params }),
 
   getConversation: (id: string) => apiClient.get(`/conversations/${id}`),
 
-  createConversation: (data: { title: string; module: string; agent_id?: string }) =>
+  createConversation: (data: {
+    title: string;
+    module: string;
+    agent_id?: string;
+    project_id?: string | null;
+    context?: Record<string, unknown>;
+  }) =>
     apiClient.post('/conversations', data),
 
   deleteConversation: (id: string) => apiClient.delete(`/conversations/${id}`),
 
   sendMessage: (conversationId: string, content: string) =>
-    apiClient.post(`/conversations/${conversationId}/messages`, { content }),
+    apiClient.post(`/conversations/${conversationId}/messages`, { content }, { timeout: 120000 }),
+
+  chat: (data: { conversation_id: string; agent_id: string; message: string }) =>
+    apiClient.post('/chat', data, { timeout: 120000 }),
 };
 
 // ==================== Mock Data Helpers ====================

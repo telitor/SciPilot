@@ -49,36 +49,15 @@ with check (
 -- -----------------------------------------------------------------------------
 -- 2. Retire access policies for the former private Storage bucket.
 --
--- Never delete stored objects in a schema migration.  The bucket metadata is
--- removed only when no object remains.  If objects still exist, an operator
--- can archive/delete them with service-role access and then remove the bucket.
+-- Never delete stored objects or bucket metadata in a schema migration.
+-- Supabase protects the storage schema from direct deletion; an operator can
+-- inspect and remove an obsolete bucket later through the Storage API.
 -- -----------------------------------------------------------------------------
 
 drop policy if exists kb_storage_select_own on storage.objects;
 drop policy if exists kb_storage_insert_own on storage.objects;
 drop policy if exists kb_storage_update_own on storage.objects;
 drop policy if exists kb_storage_delete_own on storage.objects;
-
-delete from storage.buckets as bucket
-where bucket.id = 'knowledge-base'
-  and not exists (
-    select 1
-    from storage.objects as stored_object
-    where stored_object.bucket_id = bucket.id
-  );
-
-do $$
-begin
-  if exists (
-    select 1
-    from storage.buckets
-    where id = 'knowledge-base'
-  ) then
-    raise notice
-      'Storage bucket knowledge-base was retained because it still contains objects';
-  end if;
-end;
-$$;
 
 
 -- -----------------------------------------------------------------------------

@@ -68,6 +68,9 @@ function CitationCard({ citation }: { citation: KnowledgeCitation }) {
             {typeof citation.score === 'number' && (
               <span>score {citation.score.toFixed(3)}</span>
             )}
+            {typeof citation.rerank_score === 'number' && (
+              <span>rank {citation.rerank_score.toFixed(3)}</span>
+            )}
             {typeof citation.chunk_index === 'number' && (
               <span>chunk {citation.chunk_index}</span>
             )}
@@ -263,6 +266,17 @@ function KnowledgeBase() {
         <section className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
           <div className="sci-card-glow min-w-0">
             <h2 className="sci-section-title mb-4">{answer ? '知识库回答' : '检索概览'}</h2>
+            {result.retrieval_queries && result.retrieval_queries.length > 0 && (
+              <div className="mb-4 border-l-2 border-sci-accent pl-3 text-xs leading-5 text-sci-muted">
+                <p>
+                  {result.retrieval_queries.length} 路查询 · 候选 {result.candidate_count ?? citations.length} · 本地融合重排
+                  {result.retrieval_degraded ? ' · 已降级为可用检索结果' : ''}
+                </p>
+                {result.retrieval_queries.length > 1 && (
+                  <p className="mt-1 break-words">改写：{result.retrieval_queries.slice(1).join('；')}</p>
+                )}
+              </div>
+            )}
             {answer ? (
               <div className="sci-markdown break-words text-sm">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown>

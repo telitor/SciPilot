@@ -6,7 +6,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import requests
 
@@ -184,6 +184,54 @@ class XunfeiKnowledgeBaseServiceTests(unittest.TestCase):
         self.assertEqual(citations[1]["title"], "paper-two.pdf")
         self.assertTrue(response.closed)
 
+    def test_vector_search_can_be_scoped_to_one_uploaded_file(self):
+        response = _FakeResponse(payload={"code": 0, "data": []})
+        session = _QueueSession(response)
+        client = service.XunfeiKnowledgeBaseClient(self.settings, session=session)
+
+        client.vector_search("当前论文的方法是什么？", 4, file_ids=["file-owned"])
+
+        _, call = session.last_call
+        self.assertEqual(call["json"]["fileIds"], ["file-owned"])
+        self.assertNotIn("repoIds", call["json"])
+
+    def test_upload_file_uses_shared_repository_and_returns_safe_payload(self):
+        response = _FakeResponse(
+            payload={"code": 0, "sid": "sid-upload", "data": {"fileId": "file-1"}}
+        )
+        session = _QueueSession(response)
+        client = service.XunfeiKnowledgeBaseClient(self.settings, session=session)
+
+        payload = client.upload_file("paper.pdf", b"%PDF-test")
+
+        url, call = session.last_call
+        self.assertEqual(url, "https://chatdoc.xfyun.cn/openapi/v1/file/upload")
+        fields = {name: value for name, value in call["files"]}
+        self.assertEqual(fields["repoIds"], (None, "repo-test"))
+        self.assertEqual(fields["file"][0], "paper.pdf")
+        self.assertEqual(payload["data"]["fileId"], "file-1")
+        self.assertNotIn("secret-test", str(call))
+
+    def test_file_status_uses_comma_separated_form_field(self):
+        response = _FakeResponse(
+            payload={
+                "code": 0,
+                "data": [
+                    {"fileId": "file-1", "fileStatus": "vectored"},
+                    {"fileId": "file-2", "fileStatus": "vectoring"},
+                ],
+            }
+        )
+        session = _QueueSession(response)
+        client = service.XunfeiKnowledgeBaseClient(self.settings, session=session)
+
+        statuses = client.file_status(["file-1", "file-2"])
+
+        url, call = session.last_call
+        self.assertEqual(url, "https://chatdoc.xfyun.cn/openapi/v1/file/status")
+        self.assertEqual(call["files"]["fileIds"], (None, "file-1,file-2"))
+        self.assertEqual(statuses[0]["fileStatus"], "vectored")
+
     def test_repo_files_supplies_file_name_mapping_for_vector_citations(self):
         files_response = _FakeResponse(
             payload={
@@ -318,6 +366,112 @@ class XunfeiKnowledgeBaseServiceTests(unittest.TestCase):
         self.assertIsInstance(citations, list)
         self.assertEqual(citations[0]["title"], "source.pdf")
         self.assertEqual(citations[0]["excerpt"], "source text")
+
+    def test_query_rewrite_builds_one_bounded_keyword_variant(self):
+        with patch.dict(
+            os.environ,
+            {
+                "XFYUN_KB_QUERY_REWRITE_ENABLED": "true",
+                "XFYUN_KB_MAX_QUERY_VARIANTS": "2",
+            },
+            clear=True,
+        ):
+            queries = service.build_retrieval_queries(
+                "请问这篇论文主要运用了什么算法？"
+            )
+
+        self.assertEqual(queries[0], "请问这篇论文主要运用了什么算法?")
+        self.assertEqual(len(queries), 2)
+        self.assertIn("核心算法", queries[1])
+        self.assertNotIn("请问", queries[1])
+
+    def test_reranker_deduplicates_and_rewards_multi_query_evidence(self):
+        original = "软件缺陷预测常用哪些评价指标"
+        rewritten = "软件缺陷预测 常用 评价指标"
+        result, candidate_count = service.rerank_retrieval_candidates(
+            [
+                (
+                    original,
+                    [
+                        {
+                            "document_id": "a",
+                            "chunk_id": "a:0",
+                            "score": 0.99,
+                            "title": "其他论文",
+                            "excerpt": "与目标问题没有直接关系。",
+                        },
+                        {
+                            "document_id": "b",
+                            "chunk_id": "b:0",
+                            "score": 0.75,
+                            "title": "缺陷预测研究",
+                            "excerpt": "常用评价指标包括 F1、AUC 和召回率。",
+                        },
+                    ],
+                ),
+                (
+                    rewritten,
+                    [
+                        {
+                            "document_id": "b",
+                            "chunk_id": "b:0",
+                            "score": 0.82,
+                            "title": "缺陷预测研究",
+                            "excerpt": "常用评价指标包括 F1、AUC 和召回率。",
+                        },
+                        {
+                            "document_id": "c",
+                            "chunk_id": "c:0",
+                            "score": 0.70,
+                            "title": "软件质量",
+                            "excerpt": "实验使用准确率衡量模型。",
+                        },
+                    ],
+                ),
+            ],
+            top_n=3,
+        )
+
+        self.assertEqual(candidate_count, 3)
+        self.assertEqual(result[0]["document_id"], "b")
+        self.assertEqual(result[0]["index"], 1)
+        self.assertEqual(result[0]["matched_queries"], [original, rewritten])
+        self.assertGreater(result[0]["rerank_score"], result[1]["rerank_score"])
+
+    def test_second_query_failure_degrades_to_original_results(self):
+        client = MagicMock()
+        client.repo_files.return_value = []
+        client.vector_search.side_effect = [
+            [
+                {
+                    "document_id": "a",
+                    "chunk_id": "a:0",
+                    "score": 0.8,
+                    "title": "paper.pdf",
+                    "excerpt": "核心算法使用卷积神经网络。",
+                }
+            ],
+            service.XunfeiKnowledgeBaseError("星火知识库检索暂时不可用"),
+        ]
+        with patch.dict(
+            os.environ,
+            self._configured_environment(
+                XFYUN_KB_QUERY_REWRITE_ENABLED="true",
+                XFYUN_KB_MAX_QUERY_VARIANTS="2",
+            ),
+            clear=True,
+        ), patch.object(
+            service.XunfeiKnowledgeBaseClient, "from_env", return_value=client
+        ):
+            result = service.retrieve_xunfei_knowledge_base(
+                "请问这篇论文主要运用了什么算法？",
+                top_n=4,
+            )
+
+        self.assertTrue(result["degraded"])
+        self.assertEqual(len(result["retrieval_queries"]), 1)
+        self.assertEqual(result["citations"][0]["document_id"], "a")
+        self.assertEqual(client.vector_search.call_count, 2)
 
     def test_missing_environment_reports_exact_variables(self):
         with patch.dict(os.environ, {}, clear=True):

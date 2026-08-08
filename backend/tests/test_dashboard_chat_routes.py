@@ -234,8 +234,14 @@ class DashboardChatRouteTests(unittest.TestCase):
         with (
             patch.object(
                 routes,
-                "_search_external_knowledge",
-                return_value=self.citations,
+                "_retrieve_external_knowledge",
+                return_value={
+                    "citations": self.citations,
+                    "retrieval_queries": [payload.text],
+                    "candidate_count": len(self.citations),
+                    "rerank_mode": "rrf-lexical-v1",
+                    "degraded": False,
+                },
             ),
             patch.object(
                 routes,
@@ -249,6 +255,7 @@ class DashboardChatRouteTests(unittest.TestCase):
         self.assertIn("[1]", result["answer"])
         self.assertIn("固定依赖版本", result["answer"])
         self.assertEqual(result["citations"], self.citations)
+        self.assertEqual(result["rerank_mode"], "rrf-lexical-v1")
 
 
 if __name__ == "__main__":

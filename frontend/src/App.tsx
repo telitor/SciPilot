@@ -14,6 +14,7 @@ import ResultAnalyze from '@/pages/ResultAnalyze';
 import KnowledgeBase from '@/pages/KnowledgeBase';
 import KnowledgeGraph from '@/pages/KnowledgeGraph';
 import Profile from '@/pages/Profile';
+import Projects from '@/pages/Projects';
 import NotificationContainer from '@/components/NotificationContainer';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -30,6 +31,7 @@ function App() {
         <Route path="/register" element={<Register />} />
         <Route element={<AppLayout />}>
           <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
+          <Route path="/projects" element={<RequireAuth><Projects /></RequireAuth>} />
           <Route path="/paper/read" element={<RequireAuth><PaperRead /></RequireAuth>} />
           <Route path="/paper/library" element={<RequireAuth><PaperLibrary /></RequireAuth>} />
           <Route path="/research/decompose" element={<RequireAuth><ResearchDecompose /></RequireAuth>} />

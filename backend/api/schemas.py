@@ -1,4 +1,6 @@
+import json
 from typing import Any, Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -96,6 +98,20 @@ class CreateConversationRequest(BaseModel):
     title: str = Field(default="新的对话", max_length=200)
     module: str = Field(default="general", max_length=50)
     agent_id: Optional[str] = None
+    project_id: Optional[UUID] = None
+    context: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("context")
+    @classmethod
+    def validate_context(cls, value: dict[str, Any]) -> dict[str, Any]:
+        paper_id = value.get("paper_id")
+        if paper_id is not None and (
+            not isinstance(paper_id, str) or not paper_id.strip() or len(paper_id) > 100
+        ):
+            raise ValueError("context.paper_id 格式不正确")
+        if len(json.dumps(value, ensure_ascii=False)) > 10_000:
+            raise ValueError("context 内容不能超过 10000 个字符")
+        return value
 
 
 class NewMessageRequest(BaseModel):
@@ -110,17 +126,244 @@ class LegacyChatRequest(BaseModel):
 
 class ResearchDecomposeRequest(BaseModel):
     direction: str = Field(min_length=3, max_length=4000)
+    project_id: Optional[UUID] = None
 
 
 class ExperimentRoadmapRequest(BaseModel):
     question_id: str = Field(min_length=1, max_length=100)
     objective: Optional[str] = Field(default=None, max_length=2000)
+    project_id: Optional[UUID] = None
 
 
 class RepoAnalysisRequest(BaseModel):
     repo_url: str = Field(min_length=8, max_length=2048)
+    project_id: Optional[UUID] = None
 
 
 class DiagnoseRequest(BaseModel):
     error_log: str = Field(min_length=1, max_length=50_000)
     repo_id: str
+
+
+ProjectStatus = Literal["draft", "active", "completed", "archived"]
+ProjectStage = Literal[
+    "discovery",
+    "literature",
+    "question",
+    "experiment",
+    "reproduction",
+    "analysis",
+    "completed",
+]
+
+
+class CreateResearchProjectRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    objective: Optional[str] = Field(default=None, max_length=2000)
+    current_stage: ProjectStage = "discovery"
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, value: str) -> str:
+        cleaned = value.strip()
+        if len(cleaned) < 2:
+            raise ValueError("项目名称至少需要 2 个字符")
+        return cleaned
+
+
+class UpdateResearchProjectRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=2, max_length=120)
+    objective: Optional[str] = Field(default=None, max_length=2000)
+    status: Optional[Literal["draft", "active", "completed"]] = None
+    current_stage: Optional[ProjectStage] = None
+
+    @field_validator("name")
+    @classmethod
+    def updated_name_must_not_be_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if len(cleaned) < 2:
+            raise ValueError("项目名称至少需要 2 个字符")
+        return cleaned
+
+    @model_validator(mode="after")
+    def require_update(self):
+        if not self.model_fields_set:
+            raise ValueError("至少提供一个需要更新的项目字段")
+        return self
+
+
+class ProjectAssignmentRequest(BaseModel):
+    project_id: Optional[UUID] = None
+
+
+# Stable response contracts for the P0 research workflow. These models keep
+# FastAPI's OpenAPI schema useful to the frontend and CI without constraining
+# provider-specific metadata stored alongside the core fields.
+
+
+ResearchJobStatus = Literal[
+    "pending", "running", "succeeded", "failed", "cancelled"
+]
+
+
+class PaperUploadJobResponse(BaseModel):
+    job_id: str
+    paper_id: str
+    status: ResearchJobStatus
+    progress: int = Field(ge=0, le=100)
+
+
+class ResearchJobResponse(BaseModel):
+    id: str
+    project_id: Optional[str] = None
+    paper_id: Optional[str] = None
+    job_type: str
+    status: ResearchJobStatus
+    progress: int = Field(ge=0, le=100)
+    result: dict[str, Any] = Field(default_factory=dict)
+    error_message: Optional[str] = None
+    attempts: int = Field(ge=0)
+    max_attempts: int = Field(ge=1)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class ResearchJobListResponse(BaseModel):
+    items: list[ResearchJobResponse]
+
+
+class ChatAgentResponse(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    category: Optional[str] = None
+    is_public: bool = True
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    message: dict[str, Any]
+    citations: list[dict[str, Any]]
+    knowledge_used: bool
+    model: Optional[str] = None
+    agent: ChatAgentResponse
+
+
+class ResearchNodeResponse(BaseModel):
+    id: str
+    question: str
+    feasibility: Literal["high", "medium", "low"]
+    datasets: list[str] = Field(default_factory=list)
+    papers: list[str] = Field(default_factory=list)
+    children: list["ResearchNodeResponse"] = Field(default_factory=list)
+
+
+class ResearchTreeResponse(BaseModel):
+    id: str
+    project_id: Optional[str] = None
+    core_question: str
+    sub_questions: list[ResearchNodeResponse]
+    generation_mode: Optional[str] = None
+
+
+class ExperimentStepResponse(BaseModel):
+    step: int = Field(ge=1)
+    task: str
+    details: str
+    estimated_days: int = Field(ge=1)
+    status: Literal["pending", "in_progress", "completed"] = "pending"
+
+
+class BaselineResponse(BaseModel):
+    name: str
+    paper_id: str
+    github_url: str
+    stars: int = 0
+    description: Optional[str] = None
+
+
+class DatasetResponse(BaseModel):
+    name: str
+    size: str
+    language: str
+    url: str
+    description: Optional[str] = None
+
+
+class ExperimentRoadmapResponse(BaseModel):
+    id: str
+    project_id: Optional[str] = None
+    objective: str
+    steps: list[ExperimentStepResponse]
+    baselines: list[BaselineResponse]
+    datasets: list[DatasetResponse]
+    tools: list[str] = Field(default_factory=list)
+    generation_mode: Optional[str] = None
+
+
+class RepoFileResponse(BaseModel):
+    name: str
+    path: str
+    type: Literal["file", "directory"]
+    children: list["RepoFileResponse"] = Field(default_factory=list)
+    size: Optional[int] = None
+
+
+class DependencyResponse(BaseModel):
+    name: str
+    version: str
+    purpose: str
+
+
+class ReproductionStepResponse(BaseModel):
+    step: int = Field(ge=1)
+    instruction: str
+    command: Optional[str] = None
+    checked: bool = False
+
+
+class CodeReproductionResponse(BaseModel):
+    id: str
+    project_id: Optional[str] = None
+    repo_name: str
+    repo_url: str
+    language: str
+    stars: int
+    description: str
+    file_tree: list[RepoFileResponse]
+    dependencies: list[DependencyResponse]
+    steps: list[ReproductionStepResponse]
+    generation_mode: Optional[str] = None
+
+
+class ChartResponse(BaseModel):
+    type: Literal["bar", "line", "boxplot", "radar", "heatmap"]
+    title: str
+    data: Any
+    options: Optional[dict[str, Any]] = None
+
+
+class StatsSummaryResponse(BaseModel):
+    metric: str
+    mean: float
+    std: float
+    min: float
+    max: float
+    ci95: tuple[float, float]
+    count: Optional[int] = None
+    p_value: Optional[float] = None
+
+
+class ResultAnalysisResponse(BaseModel):
+    id: str
+    project_id: Optional[str] = None
+    charts: list[ChartResponse]
+    stats: list[StatsSummaryResponse]
+    interpretation: str
+    suggestions: list[str]
+    row_count: Optional[int] = None
+    generation_mode: Optional[str] = None

@@ -8,7 +8,7 @@ from services.finetuned_model_service import (
     call_finetuned_model,
     is_finetuned_model_configured,
 )
-from services.xunfei_agent_service import call_paper_reading_agent
+from services.xunfei_agent_service import call_xunfei_agent_by_category
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
@@ -69,15 +69,29 @@ def generate_reply(
         暂时调用默认 LLM 或 mock 回复。
     """
 
+    professional_categories = {
+        "paper-reading",
+        "problem-decomposition",
+        "project-planning",
+        "result-interpretation",
+        "code-reproduction",
+    }
+    if agent_category in professional_categories:
+        agent_message = user_message
+        if system_prompt.strip():
+            agent_message = (
+                f"【智能体职责】\n{system_prompt.strip()}\n\n"
+                f"【用户请求】\n{user_message.strip()}"
+            )
+        return call_xunfei_agent_by_category(
+            user_id=user_id,
+            user_message=agent_message,
+            agent_category=agent_category,
+        )
+
     if is_finetuned_model_configured():
         return call_finetuned_model(
             system_prompt=system_prompt,
-            user_message=user_message,
-        )
-
-    if agent_category == "paper-reading":
-        return call_paper_reading_agent(
-            user_id=user_id,
             user_message=user_message,
         )
 
