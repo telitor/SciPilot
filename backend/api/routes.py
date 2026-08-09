@@ -35,6 +35,7 @@ from supabase_auth.errors import AuthApiError, AuthRetryableError, AuthUnknownEr
 from api.dependencies import (
     database,
     format_user,
+    get_current_admin,
     get_current_user,
     get_or_create_profile,
     local_demo_login,
@@ -44,6 +45,8 @@ from api.dependencies import (
     require_owned_row,
 )
 from api.schemas import (
+    AdminFeedbackListResponse,
+    AdminFeedbackResponse,
     AgentKnowledgeAskRequest,
     AgentWorkflowEnvelopeResponse,
     AgentWorkflowResponse,
@@ -61,6 +64,11 @@ from api.schemas import (
     DiagnoseRequest,
     ExperimentRoadmapRequest,
     ExperimentRoadmapResponse,
+    EvaluationRunListResponse,
+    EvaluationRunRequest,
+    EvaluationRunResponse,
+    EvaluationSuiteResponse,
+    FeedbackReviewRequest,
     KnowledgeQueryRequest,
     LegacyChatRequest,
     LoginRequest,
@@ -86,6 +94,7 @@ from services.finetuned_model_service import (
     call_finetuned_model,
     model_service_status,
 )
+from services.evaluation_service import evaluate_rag_retrieval_cases
 from services.llm_service import generate_reply
 from services.research_job_service import (
     PermanentResearchJobError,
@@ -3908,6 +3917,8 @@ def upsert_message_feedback(
         "rating": payload.rating,
         "comment": payload.comment,
         "review_status": "pending",
+        "reviewed_by": None,
+        "review_note": None,
         "reviewed_at": None,
     }
     try:
@@ -3923,6 +3934,257 @@ def upsert_message_feedback(
     saved = _first(result)
     if not saved:
         raise HTTPException(status_code=500, detail="保存反馈失败")
+    return saved
+
+
+@router.get(
+    "/admin/feedback",
+    response_model=AdminFeedbackListResponse,
+)
+def list_feedback_for_review(
+    review_status: str = Query(default="pending"),
+    limit: int = Query(default=50, ge=1, le=200),
+    user=Depends(get_current_admin),
+):
+    if review_status not in {"pending", "reviewed", "rejected", "all"}:
+        raise HTTPException(status_code=422, detail="反馈审核状态无效")
+    query = database().table("message_feedback").select(
+        "id,user_id,conversation_id,message_id,ai_run_id,rating,comment,"
+        "review_status,reviewed_by,review_note,reviewed_at,created_at,updated_at"
+    )
+    if review_status != "all":
+        query = query.eq("review_status", review_status)
+    rows = query.order("created_at", desc=True).limit(limit).execute().data or []
+    return {"items": rows, "total": len(rows)}
+
+
+@router.patch(
+    "/admin/feedback/{feedback_id}/review",
+    response_model=AdminFeedbackResponse,
+)
+def review_message_feedback(
+    feedback_id: str,
+    payload: FeedbackReviewRequest,
+    user=Depends(get_current_admin),
+):
+    existing = _first(
+        database()
+        .table("message_feedback")
+        .select("id")
+        .eq("id", feedback_id)
+        .limit(1)
+        .execute()
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+    reviewed_at = datetime.now(timezone.utc).isoformat()
+    result = (
+        database()
+        .table("message_feedback")
+        .update(
+            {
+                "review_status": payload.review_status,
+                "reviewed_by": str(user.id),
+                "review_note": payload.review_note,
+                "reviewed_at": reviewed_at,
+            }
+        )
+        .eq("id", feedback_id)
+        .execute()
+    )
+    saved = _first(result)
+    if not saved:
+        raise HTTPException(status_code=500, detail="反馈审核保存失败")
+    record_activity(
+        str(user.id),
+        "ai-quality",
+        "审核智能体反馈",
+        payload.review_status,
+        entity_type="message_feedback",
+        entity_id=feedback_id,
+        metadata={"review_status": payload.review_status},
+    )
+    return saved
+
+
+@router.get(
+    "/admin/evaluations/suites",
+    response_model=list[EvaluationSuiteResponse],
+)
+def list_evaluation_suites(user=Depends(get_current_admin)):
+    suites = (
+        database()
+        .table("evaluation_suites")
+        .select("id,slug,name,description,module,version,is_active")
+        .eq("is_active", True)
+        .order("slug")
+        .order("version", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    suite_ids = [str(item["id"]) for item in suites]
+    cases = []
+    if suite_ids:
+        cases = (
+            database()
+            .table("evaluation_cases")
+            .select("suite_id")
+            .in_("suite_id", suite_ids)
+            .execute()
+            .data
+            or []
+        )
+    case_counts = Counter(str(item.get("suite_id")) for item in cases)
+    return [
+        {**item, "case_count": case_counts.get(str(item.get("id")), 0)}
+        for item in suites
+    ]
+
+
+@router.get(
+    "/admin/evaluations/runs",
+    response_model=EvaluationRunListResponse,
+)
+def list_evaluation_runs(
+    limit: int = Query(default=20, ge=1, le=100),
+    user=Depends(get_current_admin),
+):
+    rows = (
+        database()
+        .table("evaluation_runs")
+        .select(
+            "id,suite_id,mode,status,provider,model,case_count,passed_count,"
+            "failed_count,metrics,error_message,started_at,completed_at"
+        )
+        .order("started_at", desc=True)
+        .limit(limit)
+        .execute()
+        .data
+        or []
+    )
+    return {"items": rows, "total": len(rows)}
+
+
+@router.post(
+    "/admin/evaluations/runs",
+    response_model=EvaluationRunResponse,
+)
+def run_quality_evaluation(
+    payload: EvaluationRunRequest,
+    user=Depends(get_current_admin),
+):
+    if payload.mode != "offline":
+        raise HTTPException(
+            status_code=409,
+            detail="真实模型评测需要单独审批，本接口当前只允许离线评测",
+        )
+    suite = _first(
+        database()
+        .table("evaluation_suites")
+        .select("id,slug,module,version")
+        .eq("slug", payload.suite_slug)
+        .eq("is_active", True)
+        .order("version", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not suite:
+        raise HTTPException(status_code=404, detail="评测集不存在或未启用")
+    if suite.get("module") != "rag-retrieval":
+        raise HTTPException(status_code=400, detail="当前不支持该评测集类型")
+    cases = (
+        database()
+        .table("evaluation_cases")
+        .select("id,case_key,input,expected")
+        .eq("suite_id", suite["id"])
+        .order("case_key")
+        .execute()
+        .data
+        or []
+    )
+    if not cases:
+        raise HTTPException(status_code=409, detail="评测集没有可运行用例")
+
+    started_at = datetime.now(timezone.utc).isoformat()
+    run = _first(
+        database()
+        .table("evaluation_runs")
+        .insert(
+            {
+                "suite_id": suite["id"],
+                "initiated_by": str(user.id),
+                "mode": "offline",
+                "status": "running",
+                "provider": "deterministic-local",
+                "model": None,
+                "case_count": len(cases),
+                "config_snapshot": {
+                    "suite_slug": suite["slug"],
+                    "suite_version": suite["version"],
+                    "top_k": 3,
+                    "external_calls": False,
+                },
+                "started_at": started_at,
+            }
+        )
+        .execute()
+    )
+    if not run:
+        raise HTTPException(status_code=500, detail="创建评测运行失败")
+
+    try:
+        evaluation = evaluate_rag_retrieval_cases(cases, top_k=3)
+        result_rows = [
+            {
+                "run_id": run["id"],
+                "case_id": item["case_id"],
+                "status": item["status"],
+                "rank": item["rank"],
+                "metrics": item["metrics"],
+                "diagnostic": item["diagnostic"],
+            }
+            for item in evaluation["results"]
+        ]
+        database().table("evaluation_results").insert(result_rows).execute()
+        completed_at = datetime.now(timezone.utc).isoformat()
+        saved = _first(
+            database()
+            .table("evaluation_runs")
+            .update(
+                {
+                    "status": "completed",
+                    "passed_count": evaluation["passed_count"],
+                    "failed_count": evaluation["failed_count"],
+                    "metrics": evaluation["metrics"],
+                    "completed_at": completed_at,
+                }
+            )
+            .eq("id", run["id"])
+            .execute()
+        )
+    except Exception as exc:
+        logger.exception("Offline quality evaluation failed")
+        database().table("evaluation_runs").update(
+            {
+                "status": "failed",
+                "error_message": str(exc)[:1000],
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("id", run["id"]).execute()
+        raise HTTPException(status_code=500, detail="离线评测执行失败") from None
+
+    if not saved:
+        raise HTTPException(status_code=500, detail="保存评测结果失败")
+    record_activity(
+        str(user.id),
+        "ai-quality",
+        "运行离线评测",
+        str(suite["slug"]),
+        entity_type="evaluation_run",
+        entity_id=str(run["id"]),
+        metadata={"mode": "offline", "metrics": evaluation["metrics"]},
+    )
     return saved
 
 

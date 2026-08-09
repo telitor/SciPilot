@@ -22,7 +22,7 @@ def _canonical_path(path: str) -> str:
 def _frontend_api_calls(source: str) -> set[tuple[str, str]]:
     calls: set[tuple[str, str]] = set()
     pattern = re.compile(
-        r"apiClient\.(get|post|patch|delete)"
+        r"apiClient\.(get|post|put|patch|delete)"
         r"(?:<[\s\S]{0,240}?>)?\s*\(\s*"
         r"(?P<quote>['\"`])(?P<path>/[^'\"`]+)(?P=quote)",
     )
@@ -74,7 +74,7 @@ class FrontendBackendContractTests(unittest.TestCase):
             for path, path_item in self.openapi["paths"].items()
             if path.startswith("/api/v1")
             for method in path_item
-            if method.lower() in {"get", "post", "patch", "delete"}
+            if method.lower() in {"get", "post", "put", "patch", "delete"}
         }
         frontend_operations = _frontend_api_calls(self.frontend_source)
         self.assertGreaterEqual(len(frontend_operations), 35)
@@ -263,6 +263,23 @@ class FrontendBackendContractTests(unittest.TestCase):
         self.assertTrue(
             {"message_id", "run"}.issubset(set(dashboard.get("properties", {})))
         )
+
+    def test_admin_quality_contracts_are_published(self):
+        expected_operations = {
+            ("/admin/feedback", "get"),
+            ("/admin/feedback/{feedback_id}/review", "patch"),
+            ("/admin/evaluations/suites", "get"),
+            ("/admin/evaluations/runs", "get"),
+            ("/admin/evaluations/runs", "post"),
+        }
+        for path, method in expected_operations:
+            with self.subTest(path=path, method=method):
+                self.assertIn("200", self.operation(path, method)["responses"])
+
+        review = self.request_schema("/admin/feedback/{feedback_id}/review", "patch")
+        self.assertIn("review_status", review.get("required", []))
+        evaluation = self.request_schema("/admin/evaluations/runs", "post")
+        self.assertIn("mode", evaluation.get("properties", {}))
 
     def test_protected_frontend_routes_publish_authorization_header(self):
         public_paths = {

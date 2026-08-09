@@ -7,6 +7,7 @@ import type {
   AgentWorkflowEnvelope,
   AgentKnowledgeAnswerResponse,
   AgentKnowledgeAskRequest,
+  AdminMessageFeedback,
   DashboardChatResponse,
   DashboardChatStatus,
   KnowledgeBaseStatus,
@@ -19,6 +20,8 @@ import type {
   PublicAgent,
   ResearchTree,
   ExperimentRoadmap,
+  EvaluationRun,
+  EvaluationSuite,
   CodeReproduction,
   ResultAnalysis,
   ResearchProject,
@@ -438,6 +441,30 @@ export const feedbackAPI = {
     messageId: string,
     data: { rating: 'helpful' | 'unhelpful'; comment?: string | null },
   ) => apiClient.put<MessageFeedback>(`/messages/${messageId}/feedback`, data),
+};
+
+export const adminQualityAPI = {
+  getFeedback: (reviewStatus: 'pending' | 'reviewed' | 'rejected' | 'all' = 'pending') =>
+    apiClient.get<{ items: AdminMessageFeedback[]; total: number }>('/admin/feedback', {
+      params: { review_status: reviewStatus },
+    }),
+
+  reviewFeedback: (
+    feedbackId: string,
+    data: { review_status: 'reviewed' | 'rejected'; review_note?: string | null },
+  ) => apiClient.patch<AdminMessageFeedback>(`/admin/feedback/${feedbackId}/review`, data),
+
+  getEvaluationSuites: () =>
+    apiClient.get<EvaluationSuite[]>('/admin/evaluations/suites'),
+
+  getEvaluationRuns: () =>
+    apiClient.get<{ items: EvaluationRun[]; total: number }>('/admin/evaluations/runs'),
+
+  runOfflineEvaluation: (suiteSlug: string) =>
+    apiClient.post<EvaluationRun>('/admin/evaluations/runs', {
+      suite_slug: suiteSlug,
+      mode: 'offline',
+    }),
 };
 
 // ==================== Mock Data Helpers ====================

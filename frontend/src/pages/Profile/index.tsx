@@ -3,6 +3,7 @@ import { Mail, Calendar, FileText, MessageSquare, Star, Clock } from 'lucide-rea
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { authAPI } from '@/services/api';
+import AiQualityPanel from '@/components/AiQualityPanel';
 
 interface ProfileStats {
   paper_count: number;
@@ -23,7 +24,7 @@ interface Activity {
 function Profile() {
   const { user, updateUser } = useAuthStore();
   const { addNotification } = useUIStore();
-  const [activeTab, setActiveTab] = useState<'overview' | 'history' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'history' | 'settings' | 'quality'>('overview');
   const [profileStats, setProfileStats] = useState<ProfileStats | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [username, setUsername] = useState(user?.username ?? '');
@@ -84,6 +85,7 @@ function Profile() {
           { key: 'overview', label: '概览' },
           { key: 'history', label: '历史记录' },
           { key: 'settings', label: '设置' },
+          ...(user?.role === 'admin' ? [{ key: 'quality', label: 'AI 质量' }] : []),
         ].map((tab) => (
           <button
             key={tab.key}
@@ -201,6 +203,8 @@ function Profile() {
           </div>
         </div>
       )}
+
+      {activeTab === 'quality' && user?.role === 'admin' && <AiQualityPanel />}
     </div>
   );
 }

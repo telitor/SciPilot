@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 
 from services.supabase_service import get_supabase_client
 
@@ -95,6 +95,15 @@ def get_current_user(authorization: str | None = Header(default=None)):
 
     if not user:
         raise HTTPException(status_code=401, detail="登录凭证无效")
+    return user
+
+
+def get_current_admin(user=Depends(get_current_user)):
+    """Authorize administrators from the server-managed profile role."""
+
+    profile = get_or_create_profile(user)
+    if profile.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="需要管理员权限")
     return user
 
 

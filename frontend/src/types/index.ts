@@ -131,6 +131,42 @@ export interface MessageFeedback {
   updated_at?: string | null;
 }
 
+export interface AdminMessageFeedback extends MessageFeedback {
+  user_id: string;
+  conversation_id: string;
+  ai_run_id?: string | null;
+  reviewed_by?: string | null;
+  review_note?: string | null;
+  reviewed_at?: string | null;
+}
+
+export interface EvaluationSuite {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string | null;
+  module: string;
+  version: number;
+  is_active: boolean;
+  case_count: number;
+}
+
+export interface EvaluationRun {
+  id: string;
+  suite_id: string;
+  mode: 'offline' | 'real-model';
+  status: 'running' | 'completed' | 'failed';
+  provider?: string | null;
+  model?: string | null;
+  case_count: number;
+  passed_count: number;
+  failed_count: number;
+  metrics: Record<string, number>;
+  error_message?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
 export interface Conversation {
   id: string;
   project_id?: string | null;

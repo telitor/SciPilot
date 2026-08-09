@@ -141,6 +141,70 @@ class MessageFeedbackResponse(BaseModel):
     updated_at: Optional[str] = None
 
 
+class FeedbackReviewRequest(BaseModel):
+    review_status: Literal["reviewed", "rejected"]
+    review_note: Optional[str] = Field(default=None, max_length=1000)
+
+    @field_validator("review_note")
+    @classmethod
+    def normalize_review_note(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class AdminFeedbackResponse(MessageFeedbackResponse):
+    user_id: str
+    conversation_id: str
+    ai_run_id: Optional[str] = None
+    reviewed_by: Optional[str] = None
+    review_note: Optional[str] = None
+    reviewed_at: Optional[str] = None
+
+
+class AdminFeedbackListResponse(BaseModel):
+    items: list[AdminFeedbackResponse]
+    total: int = Field(ge=0)
+
+
+class EvaluationSuiteResponse(BaseModel):
+    id: str
+    slug: str
+    name: str
+    description: Optional[str] = None
+    module: str
+    version: int = Field(ge=1)
+    is_active: bool
+    case_count: int = Field(default=0, ge=0)
+
+
+class EvaluationRunRequest(BaseModel):
+    suite_slug: str = Field(default="rag-retrieval-baseline", min_length=1, max_length=100)
+    mode: Literal["offline", "real-model"] = "offline"
+
+
+class EvaluationRunResponse(BaseModel):
+    id: str
+    suite_id: str
+    mode: Literal["offline", "real-model"]
+    status: Literal["running", "completed", "failed"]
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    case_count: int = Field(default=0, ge=0)
+    passed_count: int = Field(default=0, ge=0)
+    failed_count: int = Field(default=0, ge=0)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    error_message: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class EvaluationRunListResponse(BaseModel):
+    items: list[EvaluationRunResponse]
+    total: int = Field(ge=0)
+
+
 class LegacyChatRequest(BaseModel):
     conversation_id: str
     agent_id: str
