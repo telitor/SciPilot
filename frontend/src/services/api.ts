@@ -3,6 +3,8 @@ import { useAuthStore } from '@/store/authStore';
 import type {
   ArtifactDetail,
   ArtifactVersionList,
+  AgentWorkflow,
+  AgentWorkflowEnvelope,
   AgentKnowledgeAnswerResponse,
   AgentKnowledgeAskRequest,
   DashboardChatResponse,
@@ -371,6 +373,27 @@ export const projectAPI = {
     memoryId: string,
     data: Partial<Pick<ProjectMemory, 'memory_type' | 'title' | 'content' | 'status'>>,
   ) => apiClient.patch<ProjectMemory>(`/projects/${projectId}/memories/${memoryId}`, data),
+
+  getWorkflow: (projectId: string) =>
+    apiClient.get<AgentWorkflowEnvelope>(`/projects/${projectId}/workflow`),
+
+  createWorkflow: (projectId: string) =>
+    apiClient.post<AgentWorkflow>(`/projects/${projectId}/workflow`),
+
+  startWorkflowTask: (projectId: string, taskId: string) =>
+    apiClient.post<AgentWorkflow>(
+      `/projects/${projectId}/workflow/tasks/${taskId}/start`,
+    ),
+
+  approveWorkflowTask: (projectId: string, taskId: string) =>
+    apiClient.post<AgentWorkflow>(
+      `/projects/${projectId}/workflow/tasks/${taskId}/approve`,
+    ),
+
+  retryWorkflowTask: (projectId: string, taskId: string) =>
+    apiClient.post<AgentWorkflow>(
+      `/projects/${projectId}/workflow/tasks/${taskId}/retry`,
+    ),
 };
 
 export const resourceAPI = {

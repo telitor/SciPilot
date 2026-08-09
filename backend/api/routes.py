@@ -44,6 +44,8 @@ from api.dependencies import (
 )
 from api.schemas import (
     AgentKnowledgeAskRequest,
+    AgentWorkflowEnvelopeResponse,
+    AgentWorkflowResponse,
     ArtifactDetailResponse,
     ArtifactRestoreRequest,
     ArtifactRevisionRequest,
@@ -1469,6 +1471,63 @@ PROJECT_STAGE_SEQUENCE = (
     "completed",
 )
 
+WORKFLOW_COLUMNS = "id,user_id,project_id,name,status,created_at,updated_at"
+WORKFLOW_TASK_COLUMNS = (
+    "id,workflow_id,user_id,project_id,task_key,title,agent_category,position,"
+    "status,research_job_id,output_paper_id,output_artifact_id,error_message,started_at,"
+    "approved_at,completed_at,created_at,updated_at"
+)
+WORKFLOW_TASK_SPECS = (
+    {
+        "task_key": "paper-reading",
+        "title": "论文精读",
+        "agent_category": "paper-reading",
+        "position": 1,
+        "launch_path": "/paper/read",
+    },
+    {
+        "task_key": "problem-decomposition",
+        "title": "问题拆解",
+        "agent_category": "problem-decomposition",
+        "position": 2,
+        "launch_path": "/research/decompose",
+    },
+    {
+        "task_key": "project-planning",
+        "title": "实验规划",
+        "agent_category": "project-planning",
+        "position": 3,
+        "launch_path": "/experiment/roadmap",
+    },
+    {
+        "task_key": "code-reproduction",
+        "title": "代码复现",
+        "agent_category": "code-reproduction",
+        "position": 4,
+        "launch_path": "/code/reproduce",
+    },
+    {
+        "task_key": "result-interpretation",
+        "title": "结果分析",
+        "agent_category": "result-interpretation",
+        "position": 5,
+        "launch_path": "/result/analyze",
+    },
+)
+WORKFLOW_ARTIFACT_TYPES = {
+    "problem-decomposition": "research-decomposition",
+    "project-planning": "experiment-roadmap",
+    "code-reproduction": "code-reproduction",
+    "result-interpretation": "result-analysis",
+}
+WORKFLOW_JOB_TASK_KEYS = {
+    "paper-analysis": "paper-reading",
+    "research-decomposition": "problem-decomposition",
+    "experiment-roadmap": "project-planning",
+    "code-reproduction": "code-reproduction",
+    "result-analysis": "result-interpretation",
+}
+
 
 def _require_project(
     project_id: str, user_id: str, *, writable: bool = False
@@ -1843,6 +1902,288 @@ def _project_asset_query(
     return rows, result.count if result.count is not None else len(rows)
 
 
+def _workflow_for_project(project_id: str, user_id: str) -> dict[str, Any] | None:
+    result = (
+        database()
+        .table("agent_workflows")
+        .select(WORKFLOW_COLUMNS)
+        .eq("project_id", project_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    return _first(result)
+
+
+def _workflow_tasks(workflow_id: str, user_id: str) -> list[dict[str, Any]]:
+    result = (
+        database()
+        .table("agent_tasks")
+        .select(WORKFLOW_TASK_COLUMNS)
+        .eq("workflow_id", workflow_id)
+        .eq("user_id", user_id)
+        .order("position")
+        .execute()
+    )
+    return result.data or []
+
+
+def _public_workflow_task(task: dict[str, Any]) -> dict[str, Any]:
+    launch_path = next(
+        (
+            str(spec["launch_path"])
+            for spec in WORKFLOW_TASK_SPECS
+            if spec["task_key"] == task.get("task_key")
+        ),
+        "/projects",
+    )
+    return {
+        key: task.get(key)
+        for key in (
+            "id",
+            "workflow_id",
+            "project_id",
+            "task_key",
+            "title",
+            "agent_category",
+            "position",
+            "status",
+            "research_job_id",
+            "output_paper_id",
+            "output_artifact_id",
+            "error_message",
+            "started_at",
+            "approved_at",
+            "completed_at",
+            "created_at",
+            "updated_at",
+        )
+    } | {"launch_path": launch_path}
+
+
+def _public_workflow(
+    workflow: dict[str, Any], tasks: list[dict[str, Any]]
+) -> dict[str, Any]:
+    return {
+        "id": workflow["id"],
+        "project_id": workflow["project_id"],
+        "name": workflow.get("name") or "科研任务流",
+        "status": workflow.get("status") or "active",
+        "created_at": workflow.get("created_at"),
+        "updated_at": workflow.get("updated_at"),
+        "tasks": [_public_workflow_task(task) for task in tasks],
+    }
+
+
+def _update_workflow_task(
+    task: dict[str, Any], user_id: str, updates: dict[str, Any]
+) -> dict[str, Any]:
+    changed = {key: value for key, value in updates.items() if task.get(key) != value}
+    if not changed:
+        return task
+    result = (
+        database()
+        .table("agent_tasks")
+        .update(changed)
+        .eq("id", str(task["id"]))
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return _first(result) or {**task, **changed}
+
+
+def _latest_workflow_output(
+    task_key: str, project_id: str, user_id: str
+) -> dict[str, Any] | None:
+    if task_key == "paper-reading":
+        papers = (
+            database()
+            .table("papers")
+            .select("id,title,updated_at")
+            .eq("user_id", user_id)
+            .eq("project_id", project_id)
+            .eq("status", "completed")
+            .order("updated_at", desc=True)
+            .limit(20)
+            .execute()
+            .data
+            or []
+        )
+        paper_ids = [str(item["id"]) for item in papers if item.get("id")]
+        if not paper_ids:
+            return None
+        reports = (
+            database()
+            .table("paper_reports")
+            .select("paper_id,status,updated_at")
+            .eq("user_id", user_id)
+            .eq("report_type", "deep-read")
+            .eq("status", "completed")
+            .in_("paper_id", paper_ids)
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return reports[0] if reports else None
+
+    artifact_type = WORKFLOW_ARTIFACT_TYPES.get(task_key)
+    if not artifact_type:
+        return None
+    result = (
+        database()
+        .table("research_artifacts")
+        .select(
+            "id,title,artifact_type,status,review_status,version_group_id,"
+            "version,project_id,updated_at"
+        )
+        .eq("user_id", user_id)
+        .eq("project_id", project_id)
+        .eq("artifact_type", artifact_type)
+        .eq("status", "completed")
+        .order("updated_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return _first(result)
+
+
+def _sync_project_workflow(
+    workflow: dict[str, Any], user_id: str
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    tasks = _workflow_tasks(str(workflow["id"]), user_id)
+    if not tasks:
+        return workflow, tasks
+    now = datetime.now(timezone.utc).isoformat()
+    completed_before = True
+    synchronized: list[dict[str, Any]] = []
+
+    for task in tasks:
+        updates: dict[str, Any] = {}
+        status = str(task.get("status") or "blocked")
+        if status != "completed":
+            job = None
+            if task.get("research_job_id"):
+                try:
+                    job = get_owned_research_job(str(task["research_job_id"]), user_id)
+                except HTTPException:
+                    job = None
+            if job and job.get("status") in {"pending", "running"} and completed_before:
+                updates.update(
+                    {
+                        "status": "in_progress",
+                        "error_message": None,
+                        "started_at": task.get("started_at") or now,
+                    }
+                )
+            elif job and job.get("status") == "failed" and completed_before:
+                updates.update(
+                    {
+                        "status": "failed",
+                        "error_message": job.get("error_message") or "任务执行失败",
+                    }
+                )
+            else:
+                output = (
+                    _latest_workflow_output(
+                        str(task.get("task_key") or ""),
+                        str(workflow["project_id"]),
+                        user_id,
+                    )
+                    if completed_before
+                    else None
+                )
+                if output and completed_before:
+                    artifact_id = output.get("id")
+                    paper_id = output.get("paper_id")
+                    if artifact_id:
+                        updates["output_artifact_id"] = str(artifact_id)
+                    if paper_id:
+                        updates["output_paper_id"] = str(paper_id)
+                    if task.get("task_key") != "paper-reading" and output.get(
+                        "review_status"
+                    ) == "confirmed":
+                        updates.update(
+                            {
+                                "status": "completed",
+                                "approved_at": task.get("approved_at") or now,
+                                "completed_at": task.get("completed_at") or now,
+                                "error_message": None,
+                            }
+                        )
+                    else:
+                        updates.update(
+                            {"status": "awaiting_approval", "error_message": None}
+                        )
+                elif completed_before and status == "blocked":
+                    updates["status"] = "ready"
+                elif not completed_before and status != "blocked":
+                    updates["status"] = "blocked"
+
+        task = _update_workflow_task(task, user_id, updates)
+        synchronized.append(task)
+        completed_before = completed_before and task.get("status") == "completed"
+
+    workflow_status = "completed" if completed_before else "active"
+    if workflow.get("status") != workflow_status:
+        result = (
+            database()
+            .table("agent_workflows")
+            .update({"status": workflow_status})
+            .eq("id", str(workflow["id"]))
+            .eq("user_id", user_id)
+            .execute()
+        )
+        workflow = _first(result) or {**workflow, "status": workflow_status}
+    return workflow, synchronized
+
+
+def _attach_research_job_to_workflow(
+    *, user_id: str, project_id: str | None, job_type: str, job_id: str
+) -> None:
+    task_key = WORKFLOW_JOB_TASK_KEYS.get(job_type)
+    if not project_id or not task_key:
+        return
+    try:
+        workflow = _workflow_for_project(project_id, user_id)
+        if not workflow:
+            return
+        task_result = (
+            database()
+            .table("agent_tasks")
+            .select(WORKFLOW_TASK_COLUMNS)
+            .eq("workflow_id", str(workflow["id"]))
+            .eq("user_id", user_id)
+            .eq("task_key", task_key)
+            .limit(1)
+            .execute()
+        )
+        task = _first(task_result)
+        if not task or task.get("status") == "completed":
+            return
+        updates: dict[str, Any] = {
+            "research_job_id": job_id,
+            "error_message": None,
+        }
+        if task.get("status") != "blocked":
+            updates.update(
+                {
+                    "status": "in_progress",
+                    "started_at": task.get("started_at")
+                    or datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        _update_workflow_task(task, user_id, updates)
+    except Exception as exc:
+        logger.info(
+            "Unable to attach research job to workflow project=%s job=%s error=%s",
+            project_id,
+            job_id,
+            type(exc).__name__,
+        )
+
+
 @router.post("/projects")
 def create_project(
     payload: CreateResearchProjectRequest,
@@ -2099,6 +2440,255 @@ def update_project_memory(
     return updated
 
 
+def _create_fixed_workflow_tasks(
+    workflow: dict[str, Any], user_id: str
+) -> list[dict[str, Any]]:
+    existing = _workflow_tasks(str(workflow["id"]), user_id)
+    existing_keys = {str(item.get("task_key")) for item in existing}
+    missing_payloads: list[dict[str, Any]] = []
+    for spec in WORKFLOW_TASK_SPECS:
+        if spec["task_key"] in existing_keys:
+            continue
+        missing_payloads.append(
+            {
+                "id": str(uuid.uuid4()),
+                "workflow_id": str(workflow["id"]),
+                "user_id": user_id,
+                "project_id": str(workflow["project_id"]),
+                "task_key": spec["task_key"],
+                "title": spec["title"],
+                "agent_category": spec["agent_category"],
+                "position": spec["position"],
+                "status": "ready" if spec["position"] == 1 else "blocked",
+            }
+        )
+    if missing_payloads:
+        database().table("agent_tasks").insert(missing_payloads).execute()
+    tasks = _workflow_tasks(str(workflow["id"]), user_id)
+    by_position = {int(item["position"]): item for item in tasks}
+    dependencies = [
+        {
+            "task_id": str(by_position[position]["id"]),
+            "depends_on_task_id": str(by_position[position - 1]["id"]),
+            "user_id": user_id,
+            "project_id": str(workflow["project_id"]),
+        }
+        for position in range(2, 6)
+        if position in by_position and position - 1 in by_position
+    ]
+    if dependencies:
+        database().table("agent_task_dependencies").upsert(
+            dependencies,
+            on_conflict="task_id,depends_on_task_id",
+        ).execute()
+    return tasks
+
+
+def _require_workflow_task(
+    workflow: dict[str, Any], task_id: str, user_id: str
+) -> dict[str, Any]:
+    result = (
+        database()
+        .table("agent_tasks")
+        .select(WORKFLOW_TASK_COLUMNS)
+        .eq("id", task_id)
+        .eq("workflow_id", str(workflow["id"]))
+        .eq("project_id", str(workflow["project_id"]))
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    task = _first(result)
+    if not task:
+        raise HTTPException(status_code=404, detail="科研任务不存在")
+    return task
+
+
+@router.get(
+    "/projects/{project_id}/workflow",
+    response_model=AgentWorkflowEnvelopeResponse,
+)
+def get_project_workflow(project_id: str, user=Depends(get_current_user)):
+    user_id = str(user.id)
+    _require_project(project_id, user_id)
+    workflow = _workflow_for_project(project_id, user_id)
+    if not workflow:
+        return {"workflow": None}
+    workflow, tasks = _sync_project_workflow(workflow, user_id)
+    return {"workflow": _public_workflow(workflow, tasks)}
+
+
+@router.post(
+    "/projects/{project_id}/workflow",
+    response_model=AgentWorkflowResponse,
+)
+def create_project_workflow(project_id: str, user=Depends(get_current_user)):
+    user_id = str(user.id)
+    project = _require_project(project_id, user_id, writable=True)
+    workflow = _workflow_for_project(project_id, user_id)
+    if not workflow:
+        result = (
+            database()
+            .table("agent_workflows")
+            .insert(
+                {
+                    "user_id": user_id,
+                    "project_id": project_id,
+                    "name": f"{project.get('name') or '科研项目'}任务流"[:120],
+                    "status": "active",
+                }
+            )
+            .execute()
+        )
+        workflow = _first(result)
+        if not workflow:
+            raise HTTPException(status_code=500, detail="创建科研任务流失败")
+    tasks = _create_fixed_workflow_tasks(workflow, user_id)
+    workflow, tasks = _sync_project_workflow(workflow, user_id)
+    record_activity(
+        user_id,
+        "workflow",
+        "启用科研任务流",
+        str(workflow.get("name") or "科研任务流"),
+        entity_type="workflow",
+        entity_id=str(workflow["id"]),
+        project_id=project_id,
+    )
+    return _public_workflow(workflow, tasks)
+
+
+@router.post(
+    "/projects/{project_id}/workflow/tasks/{task_id}/start",
+    response_model=AgentWorkflowResponse,
+)
+def start_project_workflow_task(
+    project_id: str,
+    task_id: str,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    _require_project(project_id, user_id, writable=True)
+    workflow = _workflow_for_project(project_id, user_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="请先启用科研任务流")
+    workflow, _ = _sync_project_workflow(workflow, user_id)
+    task = _require_workflow_task(workflow, task_id, user_id)
+    status = task.get("status")
+    if status == "blocked":
+        raise HTTPException(status_code=409, detail="请先完成并确认上游任务")
+    if status == "completed":
+        raise HTTPException(status_code=409, detail="该任务已经完成")
+    if status == "awaiting_approval":
+        raise HTTPException(status_code=409, detail="当前产物正在等待用户验收")
+    if status == "failed":
+        raise HTTPException(status_code=409, detail="请使用重试操作恢复失败任务")
+    if status == "ready":
+        _update_workflow_task(
+            task,
+            user_id,
+            {
+                "status": "in_progress",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "error_message": None,
+            },
+        )
+    workflow, tasks = _sync_project_workflow(workflow, user_id)
+    return _public_workflow(workflow, tasks)
+
+
+@router.post(
+    "/projects/{project_id}/workflow/tasks/{task_id}/approve",
+    response_model=AgentWorkflowResponse,
+)
+def approve_project_workflow_task(
+    project_id: str,
+    task_id: str,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    _require_project(project_id, user_id, writable=True)
+    workflow = _workflow_for_project(project_id, user_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="请先启用科研任务流")
+    workflow, _ = _sync_project_workflow(workflow, user_id)
+    task = _require_workflow_task(workflow, task_id, user_id)
+    if task.get("status") == "completed":
+        return _public_workflow(
+            workflow,
+            _workflow_tasks(str(workflow["id"]), user_id),
+        )
+    if task.get("status") != "awaiting_approval":
+        raise HTTPException(status_code=409, detail="当前任务还没有可验收的产物")
+    output = _latest_workflow_output(str(task["task_key"]), project_id, user_id)
+    if not output:
+        raise HTTPException(status_code=409, detail="当前任务还没有可验收的产物")
+    artifact_id = output.get("id")
+    paper_id = output.get("paper_id")
+    if task.get("task_key") != "paper-reading" and artifact_id:
+        confirm_artifact(str(artifact_id), user=user)
+    now = datetime.now(timezone.utc).isoformat()
+    _update_workflow_task(
+        task,
+        user_id,
+        {
+            "status": "completed",
+            "output_paper_id": str(paper_id) if paper_id else None,
+            "output_artifact_id": str(artifact_id) if artifact_id else None,
+            "approved_at": now,
+            "completed_at": now,
+            "error_message": None,
+        },
+    )
+    record_activity(
+        user_id,
+        "workflow",
+        "验收科研任务",
+        str(task.get("title") or "科研任务"),
+        entity_type="workflow-task",
+        entity_id=str(task["id"]),
+        project_id=project_id,
+    )
+    workflow, tasks = _sync_project_workflow(workflow, user_id)
+    return _public_workflow(workflow, tasks)
+
+
+@router.post(
+    "/projects/{project_id}/workflow/tasks/{task_id}/retry",
+    response_model=AgentWorkflowResponse,
+)
+def retry_project_workflow_task(
+    project_id: str,
+    task_id: str,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    _require_project(project_id, user_id, writable=True)
+    workflow = _workflow_for_project(project_id, user_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="请先启用科研任务流")
+    workflow, _ = _sync_project_workflow(workflow, user_id)
+    task = _require_workflow_task(workflow, task_id, user_id)
+    if task.get("status") != "failed":
+        raise HTTPException(status_code=409, detail="只有失败任务可以重试")
+    next_status = "ready"
+    if task.get("research_job_id"):
+        retry_owned_research_job(str(task["research_job_id"]), user_id)
+        next_status = "in_progress"
+    _update_workflow_task(
+        task,
+        user_id,
+        {
+            "status": next_status,
+            "error_message": None,
+            "started_at": datetime.now(timezone.utc).isoformat()
+            if next_status == "in_progress"
+            else None,
+        },
+    )
+    workflow, tasks = _sync_project_workflow(workflow, user_id)
+    return _public_workflow(workflow, tasks)
+
+
 @router.patch("/projects/{project_id}")
 def update_project(
     project_id: str,
@@ -2264,6 +2854,12 @@ def _enqueue_agent_job(
         input_data=input_data,
         idempotency_key=_research_job_fingerprint(job_type, input_data),
         project_id=project_id,
+    )
+    _attach_research_job_to_workflow(
+        user_id=user_id,
+        project_id=project_id,
+        job_type=job_type,
+        job_id=str(job["id"]),
     )
     return _public_research_job(job)
 
@@ -2579,6 +3175,12 @@ async def upload_paper_async(
             input_data={"paper_id": paper_id, "file_path": file_path},
             project_id=project_id,
             paper_id=paper_id,
+        )
+        _attach_research_job_to_workflow(
+            user_id=user_id,
+            project_id=project_id,
+            job_type="paper-analysis",
+            job_id=str(job["id"]),
         )
     except Exception as exc:
         if paper_created:

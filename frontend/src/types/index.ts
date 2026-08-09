@@ -371,6 +371,57 @@ export interface ProjectMemoryList {
   total: number;
 }
 
+export type AgentWorkflowStatus = 'active' | 'completed' | 'archived';
+export type AgentTaskStatus =
+  | 'blocked'
+  | 'ready'
+  | 'in_progress'
+  | 'awaiting_approval'
+  | 'completed'
+  | 'failed';
+
+export type AgentWorkflowTaskKey =
+  | 'paper-reading'
+  | 'problem-decomposition'
+  | 'project-planning'
+  | 'code-reproduction'
+  | 'result-interpretation';
+
+export interface AgentWorkflowTask {
+  id: string;
+  workflow_id: string;
+  project_id: string;
+  task_key: AgentWorkflowTaskKey;
+  title: string;
+  agent_category: string;
+  position: number;
+  status: AgentTaskStatus;
+  research_job_id?: string | null;
+  output_paper_id?: string | null;
+  output_artifact_id?: string | null;
+  error_message?: string | null;
+  launch_path: string;
+  started_at?: string | null;
+  approved_at?: string | null;
+  completed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface AgentWorkflow {
+  id: string;
+  project_id: string;
+  name: string;
+  status: AgentWorkflowStatus;
+  tasks: AgentWorkflowTask[];
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface AgentWorkflowEnvelope {
+  workflow?: AgentWorkflow | null;
+}
+
 // ==================== Knowledge Graph Types ====================
 export interface KGNode {
   id: string;

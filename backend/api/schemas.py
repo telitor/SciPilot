@@ -268,6 +268,57 @@ class ProjectMemoryListResponse(BaseModel):
     total: int = Field(ge=0)
 
 
+AgentTaskStatus = Literal[
+    "blocked",
+    "ready",
+    "in_progress",
+    "awaiting_approval",
+    "completed",
+    "failed",
+]
+
+
+class AgentWorkflowTaskResponse(BaseModel):
+    id: str
+    workflow_id: str
+    project_id: str
+    task_key: Literal[
+        "paper-reading",
+        "problem-decomposition",
+        "project-planning",
+        "code-reproduction",
+        "result-interpretation",
+    ]
+    title: str
+    agent_category: str
+    position: int = Field(ge=1, le=5)
+    status: AgentTaskStatus
+    research_job_id: Optional[str] = None
+    output_paper_id: Optional[str] = None
+    output_artifact_id: Optional[str] = None
+    error_message: Optional[str] = None
+    launch_path: str
+    started_at: Optional[str] = None
+    approved_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class AgentWorkflowResponse(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    status: Literal["active", "completed", "archived"]
+    tasks: list[AgentWorkflowTaskResponse]
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class AgentWorkflowEnvelopeResponse(BaseModel):
+    workflow: Optional[AgentWorkflowResponse] = None
+
+
 # Stable response contracts for the P0 research workflow. These models keep
 # FastAPI's OpenAPI schema useful to the frontend and CI without constraining
 # provider-specific metadata stored alongside the core fields.

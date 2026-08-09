@@ -225,6 +225,32 @@ class FrontendBackendContractTests(unittest.TestCase):
             {"items", "total"}.issubset(set(list_schema.get("required", [])))
         )
 
+    def test_agent_task_workflow_is_published(self):
+        expected_operations = {
+            ("/projects/{project_id}/workflow", "get"),
+            ("/projects/{project_id}/workflow", "post"),
+            ("/projects/{project_id}/workflow/tasks/{task_id}/start", "post"),
+            ("/projects/{project_id}/workflow/tasks/{task_id}/approve", "post"),
+            ("/projects/{project_id}/workflow/tasks/{task_id}/retry", "post"),
+        }
+        for path, method in expected_operations:
+            with self.subTest(path=path, method=method):
+                self.assertIn("200", self.operation(path, method)["responses"])
+
+        workflow_schema = self.response_schema(
+            "/projects/{project_id}/workflow",
+            "post",
+        )
+        self.assertIn("tasks", workflow_schema.get("required", []))
+        task_schema = self.openapi["components"]["schemas"][
+            "AgentWorkflowTaskResponse"
+        ]
+        self.assertTrue(
+            {"launch_path", "status", "task_key"}.issubset(
+                set(task_schema.get("required", []))
+            )
+        )
+
     def test_protected_frontend_routes_publish_authorization_header(self):
         public_paths = {
             "/auth/login",

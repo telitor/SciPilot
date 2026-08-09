@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { projectAPI } from '@/services/api';
 import ProjectMemoryPanel from '@/components/ProjectMemoryPanel';
+import ProjectWorkflowPanel from '@/components/ProjectWorkflowPanel';
 import { getApiErrorMessage } from '@/services/errors';
 import { useAuthStore } from '@/store/authStore';
 import { useProjectStore } from '@/store/projectStore';
@@ -508,6 +509,7 @@ function Projects() {
                 <div><h3 className="sci-section-title">研究产物</h3>{renderAssetRows(detail.assets.artifacts, 'artifact', null)}</div>
               </div>
 
+              <ProjectWorkflowPanel projectId={detail.id} />
               <ProjectMemoryPanel projectId={detail.id} />
             </>
           )}
