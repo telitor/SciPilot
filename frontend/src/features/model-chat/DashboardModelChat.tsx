@@ -18,8 +18,15 @@ import remarkGfm from 'remark-gfm';
 import { isAxiosError } from 'axios';
 import { conversationAPI, dashboardChatAPI } from '@/services/api';
 import { getApiErrorMessage } from '@/services/errors';
+import MessageFeedbackControls from '@/components/MessageFeedbackControls';
 import { useAuthStore } from '@/store/authStore';
-import type { DashboardChatStatus, KnowledgeCitation, ModelChatMessage } from '@/types';
+import type {
+  AiRunSummary,
+  DashboardChatStatus,
+  KnowledgeCitation,
+  MessageFeedback,
+  ModelChatMessage,
+} from '@/types';
 import './model-chat.css';
 
 interface ViewMessage extends ModelChatMessage {
@@ -28,6 +35,9 @@ interface ViewMessage extends ModelChatMessage {
   knowledgeUnavailable?: boolean;
   persistenceUnavailable?: boolean;
   synthetic?: boolean;
+  persisted?: boolean;
+  run?: AiRunSummary | null;
+  feedback?: MessageFeedback | null;
 }
 
 const QUICK_PROMPTS = [
@@ -116,11 +126,16 @@ function DashboardModelChat() {
             role: 'user' | 'assistant';
             content: string;
             citations?: KnowledgeCitation[];
+            run?: AiRunSummary | null;
+            feedback?: MessageFeedback | null;
           }) => ({
             id: item.id || createId(),
             role: item.role,
             content: item.content,
             citations: item.citations,
+            persisted: true,
+            run: item.run,
+            feedback: item.feedback,
           }));
         if (!cancelled && restored.length) {
           setMessages([WELCOME_MESSAGE, ...restored].slice(-20));
@@ -189,12 +204,14 @@ function DashboardModelChat() {
         setConversationId(response.data.conversation_id);
       }
       const assistantMessage: ViewMessage = {
-        id: createId(),
+        id: response.data.message_id || createId(),
         role: 'assistant',
         content: response.data.reply,
         citations: response.data.citations,
         knowledgeUnavailable: response.data.knowledge_unavailable,
         persistenceUnavailable: response.data.persistence_unavailable,
+        persisted: Boolean(response.data.message_id),
+        run: response.data.run,
       };
       setMessages((current) => [
         ...current,
@@ -343,6 +360,22 @@ function DashboardModelChat() {
                 <div className="model-chat__degraded" role="status">
                   本轮回答未能保存到历史记录，请检查 Supabase 连接
                 </div>
+              )}
+              {message.role === 'assistant' && message.run && (
+                <div className="model-chat__degraded" role="status">
+                  {message.run.status === 'degraded' ? '降级响应' : '模型响应'}
+                  {' · '}{message.run.latency_ms} ms
+                  {message.run.retrieval_count > 0
+                    ? ` · ${message.run.retrieval_count} 条证据`
+                    : ''}
+                </div>
+              )}
+              {message.role === 'assistant' && message.persisted && !message.synthetic && (
+                <MessageFeedbackControls
+                  messageId={message.id}
+                  initialFeedback={message.feedback}
+                  compact
+                />
               )}
             </div>
           </article>

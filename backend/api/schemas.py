@@ -118,6 +118,29 @@ class NewMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=50_000)
 
 
+class MessageFeedbackRequest(BaseModel):
+    rating: Literal["helpful", "unhelpful"]
+    comment: Optional[str] = Field(default=None, max_length=1000)
+
+    @field_validator("comment")
+    @classmethod
+    def normalize_feedback_comment(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class MessageFeedbackResponse(BaseModel):
+    id: str
+    message_id: str
+    rating: Literal["helpful", "unhelpful"]
+    comment: Optional[str] = None
+    review_status: Literal["pending", "reviewed", "rejected"]
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class LegacyChatRequest(BaseModel):
     conversation_id: str
     agent_id: str
@@ -427,6 +450,17 @@ class ChatAgentResponse(BaseModel):
     is_public: bool = True
 
 
+class AiRunSummaryResponse(BaseModel):
+    id: str
+    status: Literal["succeeded", "degraded", "failed"]
+    response_mode: Optional[str] = None
+    fallback_reason: Optional[str] = None
+    retrieval_count: int = Field(default=0, ge=0)
+    latency_ms: int = Field(ge=0)
+    model_latency_ms: Optional[int] = Field(default=None, ge=0)
+    created_at: Optional[str] = None
+
+
 class ChatResponse(BaseModel):
     reply: str
     message: dict[str, Any]
@@ -434,6 +468,19 @@ class ChatResponse(BaseModel):
     knowledge_used: bool
     model: Optional[str] = None
     agent: ChatAgentResponse
+    run: Optional[AiRunSummaryResponse] = None
+
+
+class DashboardChatResponse(BaseModel):
+    reply: str
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    model: Optional[str] = None
+    knowledge_used: bool
+    knowledge_unavailable: bool = False
+    conversation_id: Optional[str] = None
+    message_id: Optional[str] = None
+    persistence_unavailable: bool = False
+    run: Optional[AiRunSummaryResponse] = None
 
 
 class ResearchNodeResponse(BaseModel):

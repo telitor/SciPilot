@@ -13,12 +13,15 @@ import {
 } from 'lucide-react';
 import { agentKnowledgeAPI, conversationAPI } from '@/services/api';
 import { getApiErrorMessage } from '@/services/errors';
+import MessageFeedbackControls from '@/components/MessageFeedbackControls';
 import { useAuthStore } from '@/store/authStore';
 import { useSelectedProjectId } from '@/store/projectStore';
 import type {
   AgentCategory,
   AgentKnowledgeCitation,
+  AiRunSummary,
   Conversation,
+  MessageFeedback,
   PublicAgent,
 } from '@/types';
 
@@ -33,6 +36,8 @@ interface PanelMessage {
   role: 'user' | 'assistant';
   content: string;
   citations: AgentKnowledgeCitation[];
+  run?: AiRunSummary | null;
+  feedback?: MessageFeedback | null;
 }
 
 const CATEGORY_LABELS: Record<AgentCategory, string> = {
@@ -76,6 +81,12 @@ function normalizeMessages(value: unknown): PanelMessage[] {
       role,
       content,
       citations: normalizeCitations(message.citations),
+      run: message.run && typeof message.run === 'object'
+        ? message.run as unknown as AiRunSummary
+        : null,
+      feedback: message.feedback && typeof message.feedback === 'object'
+        ? message.feedback as unknown as MessageFeedback
+        : null,
     }];
   });
 }
@@ -259,6 +270,8 @@ export default function AgentKnowledgePanel({
           role: 'assistant',
           content: reply,
           citations: normalizeCitations(response.data.citations),
+          run: response.data.run || null,
+          feedback: null,
         },
       ]);
       setKnowledgeUsed(Boolean(response.data.knowledge_used));
@@ -397,6 +410,21 @@ export default function AgentKnowledgePanel({
                       </div>
                     ))}
                   </div>
+                )}
+                {message.role === 'assistant' && message.run && (
+                  <p className="mt-2 text-xs text-sci-muted">
+                    {message.run.status === 'degraded' ? '降级响应' : '模型响应'}
+                    {' · '}{message.run.latency_ms} ms
+                    {message.run.retrieval_count > 0
+                      ? ` · ${message.run.retrieval_count} 条证据`
+                      : ''}
+                  </p>
+                )}
+                {message.role === 'assistant' && (
+                  <MessageFeedbackControls
+                    messageId={message.id}
+                    initialFeedback={message.feedback}
+                  />
                 )}
               </article>
             ))}

@@ -106,6 +106,29 @@ export interface Message {
   citations?: Citation[];
   created_at: string;
   isStreaming?: boolean;
+  run?: AiRunSummary | null;
+  feedback?: MessageFeedback | null;
+}
+
+export interface AiRunSummary {
+  id: string;
+  status: 'succeeded' | 'degraded' | 'failed';
+  response_mode?: string | null;
+  fallback_reason?: string | null;
+  retrieval_count: number;
+  latency_ms: number;
+  model_latency_ms?: number | null;
+  created_at?: string | null;
+}
+
+export interface MessageFeedback {
+  id: string;
+  message_id: string;
+  rating: 'helpful' | 'unhelpful';
+  comment?: string | null;
+  review_status: 'pending' | 'reviewed' | 'rejected';
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface Conversation {
@@ -532,6 +555,8 @@ export interface AgentKnowledgeAnswerResponse {
   citations: AgentKnowledgeCitation[];
   knowledge_used: boolean;
   agent: PublicAgent;
+  message: Message;
+  run?: AiRunSummary | null;
 }
 
 // ==================== Dashboard Model Chat ====================
@@ -557,7 +582,9 @@ export interface DashboardChatResponse {
   knowledge_used: boolean;
   knowledge_unavailable?: boolean;
   conversation_id?: string | null;
+  message_id?: string | null;
   persistence_unavailable?: boolean;
+  run?: AiRunSummary | null;
 }
 
 // ==================== UI Types ====================

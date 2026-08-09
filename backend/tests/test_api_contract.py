@@ -251,6 +251,19 @@ class FrontendBackendContractTests(unittest.TestCase):
             )
         )
 
+    def test_ai_feedback_and_run_summary_contracts_are_published(self):
+        feedback = self.operation("/messages/{message_id}/feedback", "put")
+        self.assertIn("200", feedback["responses"])
+        request = self.request_schema("/messages/{message_id}/feedback", "put")
+        self.assertIn("rating", request.get("required", []))
+
+        chat = self.response_schema("/chat", "post")
+        self.assertIn("run", chat.get("properties", {}))
+        dashboard = self.response_schema("/dashboard/chat", "post")
+        self.assertTrue(
+            {"message_id", "run"}.issubset(set(dashboard.get("properties", {})))
+        )
+
     def test_protected_frontend_routes_publish_authorization_header(self):
         public_paths = {
             "/auth/login",

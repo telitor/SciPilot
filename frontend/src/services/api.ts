@@ -13,6 +13,7 @@ import type {
   KnowledgeAnswerResponse,
   KnowledgeSearchResponse,
   ModelChatMessage,
+  MessageFeedback,
   PaperKnowledgeSync,
   PaperUploadJob,
   PublicAgent,
@@ -429,7 +430,14 @@ export const conversationAPI = {
     apiClient.post(`/conversations/${conversationId}/messages`, { content }, { timeout: 120000 }),
 
   chat: (data: { conversation_id: string; agent_id: string; message: string }) =>
-    apiClient.post('/chat', data, { timeout: 120000 }),
+    apiClient.post<AgentKnowledgeAnswerResponse>('/chat', data, { timeout: 120000 }),
+};
+
+export const feedbackAPI = {
+  upsert: (
+    messageId: string,
+    data: { rating: 'helpful' | 'unhelpful'; comment?: string | null },
+  ) => apiClient.put<MessageFeedback>(`/messages/${messageId}/feedback`, data),
 };
 
 // ==================== Mock Data Helpers ====================

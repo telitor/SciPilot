@@ -12,6 +12,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from io import BytesIO, StringIO
 from pathlib import Path
+from time import perf_counter
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote
@@ -52,6 +53,7 @@ from api.schemas import (
     ArtifactVersionListResponse,
     ChatResponse,
     CodeReproductionResponse,
+    DashboardChatResponse,
     DashboardChatRequest,
     CreateConversationRequest,
     CreateProjectMemoryRequest,
@@ -63,6 +65,8 @@ from api.schemas import (
     LegacyChatRequest,
     LoginRequest,
     NewMessageRequest,
+    MessageFeedbackRequest,
+    MessageFeedbackResponse,
     ProjectAssignmentRequest,
     ProjectMemoryListResponse,
     ProjectMemoryResponse,
@@ -133,6 +137,51 @@ def _safe_data(execute: Any) -> list[dict[str, Any]]:
         return result.data or []
     except Exception:
         return []
+
+
+def _record_ai_run(
+    *,
+    user_id: str,
+    module: str,
+    provider: str,
+    status: str,
+    latency_ms: int,
+    project_id: str | None = None,
+    conversation_id: str | None = None,
+    message_id: str | None = None,
+    agent_id: str | None = None,
+    model: str | None = None,
+    response_mode: str | None = None,
+    fallback_reason: str | None = None,
+    retrieval_count: int = 0,
+    model_latency_ms: int | None = None,
+) -> dict[str, Any] | None:
+    """Persist bounded operational metadata without prompts or response bodies."""
+
+    payload = {
+        "user_id": user_id,
+        "project_id": project_id,
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "agent_id": agent_id,
+        "module": module[:100] or "general",
+        "provider": provider[:100] or "unknown",
+        "model": model[:200] if model else None,
+        "status": status,
+        "response_mode": response_mode[:100] if response_mode else None,
+        "fallback_reason": fallback_reason[:200] if fallback_reason else None,
+        "retrieval_count": max(0, int(retrieval_count)),
+        "latency_ms": max(0, int(latency_ms)),
+        "model_latency_ms": (
+            max(0, int(model_latency_ms)) if model_latency_ms is not None else None
+        ),
+        "token_usage": {},
+    }
+    try:
+        return _first(database().table("ai_runs").insert(payload).execute())
+    except Exception:
+        logger.warning("AI run metadata could not be persisted")
+        return None
 
 
 def _safe_filename(filename: str) -> str:
@@ -1111,20 +1160,45 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
     if not history or history[-1]["role"] != "user":
         history.append({"role": "user", "content": content})
 
-    if agent.get("category") in PROFESSIONAL_AGENT_CATEGORIES:
-        answer = _professional_agent_answer(
-            agent=agent,
-            conversation=conversation,
-            history=history,
+    category = str(agent.get("category") or conversation.get("module") or "general")
+    provider = (
+        "xunfei-star-agent"
+        if category in PROFESSIONAL_AGENT_CATEGORIES
+        else "xunfei-maas"
+    )
+    started = perf_counter()
+    try:
+        if category in PROFESSIONAL_AGENT_CATEGORIES:
+            answer = _professional_agent_answer(
+                agent=agent,
+                conversation=conversation,
+                history=history,
+                user_id=user_id,
+            )
+        else:
+            answer = _agent_knowledge_answer(
+                agent=agent,
+                message=content,
+                top_k=8,
+                history=history,
+            )
+    except Exception:
+        elapsed_ms = round((perf_counter() - started) * 1000)
+        _record_ai_run(
             user_id=user_id,
+            project_id=str(conversation.get("project_id")) if conversation.get("project_id") else None,
+            conversation_id=str(conversation["id"]),
+            agent_id=str(agent.get("id")) if agent.get("id") else None,
+            module=category,
+            provider=provider,
+            model=category,
+            status="failed",
+            fallback_reason="provider-error",
+            latency_ms=elapsed_ms,
+            model_latency_ms=elapsed_ms,
         )
-    else:
-        answer = _agent_knowledge_answer(
-            agent=agent,
-            message=content,
-            top_k=8,
-            history=history,
-        )
+        raise
+    elapsed_ms = round((perf_counter() - started) * 1000)
     assistant = (
         database()
         .table("messages")
@@ -1164,6 +1238,31 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
     saved_message = _first(assistant)
     if not saved_message:
         raise HTTPException(status_code=500, detail="保存智能体回复失败")
+    degraded = bool(answer.get("retrieval_degraded")) or str(
+        answer.get("response_mode") or ""
+    ).endswith("evidence-only")
+    run = _record_ai_run(
+        user_id=user_id,
+        project_id=str(conversation.get("project_id")) if conversation.get("project_id") else None,
+        conversation_id=str(conversation["id"]),
+        message_id=str(saved_message["id"]),
+        agent_id=str(agent.get("id")) if agent.get("id") else None,
+        module=category,
+        provider=provider,
+        model=str(answer.get("model")) if answer.get("model") else None,
+        status="degraded" if degraded else "succeeded",
+        response_mode=str(answer.get("response_mode") or "") or None,
+        fallback_reason=(
+            "retrieval-degraded"
+            if answer.get("retrieval_degraded")
+            else "evidence-only"
+            if degraded
+            else None
+        ),
+        retrieval_count=len(answer.get("citations") or []),
+        latency_ms=elapsed_ms,
+        model_latency_ms=elapsed_ms,
+    )
     return {
         "reply": answer["reply"],
         "message": saved_message,
@@ -1174,6 +1273,7 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
             key: agent.get(key)
             for key in ("id", "name", "description", "category", "is_public")
         },
+        "run": run,
     }
 
 
@@ -3715,7 +3815,51 @@ def get_conversation(conversation_id: str, user=Depends(get_current_user)):
         .order("created_at")
         .execute()
     )
-    return {**conversation, "messages": messages.data or []}
+    message_rows = messages.data or []
+    message_ids = [str(item["id"]) for item in message_rows if item.get("id")]
+    runs: list[dict[str, Any]] = []
+    feedback_items: list[dict[str, Any]] = []
+    if message_ids:
+        runs = _safe_data(
+            lambda: database()
+            .table("ai_runs")
+            .select(
+                "id,message_id,status,response_mode,fallback_reason,retrieval_count,"
+                "latency_ms,model_latency_ms,created_at"
+            )
+            .eq("user_id", user_id)
+            .eq("conversation_id", conversation_id)
+            .in_("message_id", message_ids)
+            .execute()
+        )
+        feedback_items = _safe_data(
+            lambda: database()
+            .table("message_feedback")
+            .select(
+                "id,message_id,rating,comment,review_status,created_at,updated_at"
+            )
+            .eq("user_id", user_id)
+            .eq("conversation_id", conversation_id)
+            .in_("message_id", message_ids)
+            .execute()
+        )
+    runs_by_message = {
+        str(item.get("message_id")): item for item in runs if item.get("message_id")
+    }
+    feedback_by_message = {
+        str(item.get("message_id")): item
+        for item in feedback_items
+        if item.get("message_id")
+    }
+    enriched_messages = [
+        {
+            **item,
+            "run": runs_by_message.get(str(item.get("id"))),
+            "feedback": feedback_by_message.get(str(item.get("id"))),
+        }
+        for item in message_rows
+    ]
+    return {**conversation, "messages": enriched_messages}
 
 
 @router.post("/conversations/{conversation_id}/messages")
@@ -3727,6 +3871,59 @@ def send_message(
     user_id = str(user.id)
     conversation = require_owned_row("conversations", conversation_id, user_id)
     return _chat_reply(conversation, payload.content.strip(), user_id)
+
+
+@router.put(
+    "/messages/{message_id}/feedback",
+    response_model=MessageFeedbackResponse,
+)
+def upsert_message_feedback(
+    message_id: str,
+    payload: MessageFeedbackRequest,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    message = require_owned_row(
+        "messages",
+        message_id,
+        user_id,
+        columns="id,conversation_id,user_id,role",
+    )
+    if message.get("role") != "assistant":
+        raise HTTPException(status_code=400, detail="只能评价智能体回复")
+    run_rows = _safe_data(
+        lambda: database()
+        .table("ai_runs")
+        .select("id")
+        .eq("message_id", message_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    feedback_payload = {
+        "user_id": user_id,
+        "conversation_id": str(message["conversation_id"]),
+        "message_id": message_id,
+        "ai_run_id": str(run_rows[0]["id"]) if run_rows else None,
+        "rating": payload.rating,
+        "comment": payload.comment,
+        "review_status": "pending",
+        "reviewed_at": None,
+    }
+    try:
+        result = (
+            database()
+            .table("message_feedback")
+            .upsert(feedback_payload, on_conflict="message_id,user_id")
+            .execute()
+        )
+    except Exception:
+        logger.warning("Message feedback could not be persisted")
+        raise HTTPException(status_code=503, detail="反馈服务暂不可用，请稍后重试") from None
+    saved = _first(result)
+    if not saved:
+        raise HTTPException(status_code=500, detail="保存反馈失败")
+    return saved
 
 
 @router.delete("/conversations/{conversation_id}", status_code=204)
@@ -3898,11 +4095,11 @@ def _persist_dashboard_exchange(
     citations: list[dict[str, Any]],
     model: str | None,
     knowledge_used: bool,
-) -> tuple[str | None, bool]:
+) -> tuple[str | None, str | None, bool]:
     """Persist one completed exchange; local demo mode remains database-free."""
 
     if local_demo_mode_enabled():
-        return None, False
+        return None, None, False
 
     created_conversation = False
     try:
@@ -3928,7 +4125,7 @@ def _persist_dashboard_exchange(
             )
             conversation = _first(created)
             if not conversation:
-                return None, True
+                return None, None, True
             conversation_id = str(conversation["id"])
             created_conversation = True
 
@@ -3963,10 +4160,11 @@ def _persist_dashboard_exchange(
         )
         if len(saved.data or []) != 2:
             raise RuntimeError("message persistence incomplete")
+        assistant_message_id = str(saved.data[1]["id"])
         database().table("conversations").update(
             {"updated_at": datetime.now(timezone.utc).isoformat()}
         ).eq("id", conversation_id).eq("user_id", user_id).execute()
-        return conversation_id, False
+        return conversation_id, assistant_message_id, False
     except HTTPException:
         raise
     except Exception:
@@ -3977,14 +4175,15 @@ def _persist_dashboard_exchange(
                 ).eq("user_id", user_id).execute()
             except Exception:
                 pass
-        return conversation_id, True
+        return conversation_id, None, True
 
 
-@router.post("/dashboard/chat")
+@router.post("/dashboard/chat", response_model=DashboardChatResponse)
 def dashboard_chat(
     payload: DashboardChatRequest,
     user=Depends(get_current_user),
 ):
+    started = perf_counter()
     submitted_history = [
         {"role": item.role, "content": item.content.strip()}
         for item in payload.messages
@@ -4032,19 +4231,33 @@ def dashboard_chat(
     status = model_service_status()
     if not status.get("available"):
         raise _upstream_error("对话模型")
-    reply = _call_maas(
-        history,
-        system_prompt=_knowledge_system_prompt(
-            (
-                "你是 SciPilot 科研对话助手。请结合完整对话历史理解用户意图，"
-                "使用清晰、严谨、适合科研工作的中文作答。"
+    try:
+        reply = _call_maas(
+            history,
+            system_prompt=_knowledge_system_prompt(
+                (
+                    "你是 SciPilot 科研对话助手。请结合完整对话历史理解用户意图，"
+                    "使用清晰、严谨、适合科研工作的中文作答。"
+                ),
+                citations,
+                knowledge_requested=payload.use_knowledge_base
+                and not knowledge_unavailable,
             ),
-            citations,
-            knowledge_requested=payload.use_knowledge_base
-            and not knowledge_unavailable,
-        ),
-    )
-    conversation_id, persistence_unavailable = _persist_dashboard_exchange(
+        )
+    except Exception:
+        elapsed_ms = round((perf_counter() - started) * 1000)
+        _record_ai_run(
+            user_id=str(user.id),
+            module="dashboard-chat",
+            provider="xunfei-maas",
+            model=str(status.get("model")) if status.get("model") else None,
+            status="failed",
+            fallback_reason="provider-error",
+            latency_ms=elapsed_ms,
+            model_latency_ms=elapsed_ms,
+        )
+        raise
+    conversation_id, message_id, persistence_unavailable = _persist_dashboard_exchange(
         user_id=str(user.id),
         conversation_id=payload.conversation_id,
         query=query,
@@ -4052,6 +4265,21 @@ def dashboard_chat(
         citations=citations,
         model=status.get("model"),
         knowledge_used=bool(citations),
+    )
+    elapsed_ms = round((perf_counter() - started) * 1000)
+    run = _record_ai_run(
+        user_id=str(user.id),
+        conversation_id=(conversation_id if not persistence_unavailable else None),
+        message_id=message_id,
+        module="dashboard-chat",
+        provider="xunfei-maas",
+        model=str(status.get("model")) if status.get("model") else None,
+        status="degraded" if knowledge_unavailable else "succeeded",
+        response_mode="dashboard-model-chat",
+        fallback_reason="knowledge-unavailable" if knowledge_unavailable else None,
+        retrieval_count=len(citations),
+        latency_ms=elapsed_ms,
+        model_latency_ms=elapsed_ms,
     )
     record_activity(
         str(user.id),
@@ -4071,7 +4299,9 @@ def dashboard_chat(
         "knowledge_used": bool(citations),
         "knowledge_unavailable": knowledge_unavailable,
         "conversation_id": conversation_id,
+        "message_id": message_id,
         "persistence_unavailable": persistence_unavailable,
+        "run": run,
     }
 
 

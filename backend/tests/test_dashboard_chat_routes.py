@@ -17,6 +17,17 @@ from api.schemas import DashboardChatRequest, KnowledgeQueryRequest
 class DashboardChatRouteTests(unittest.TestCase):
     def setUp(self):
         self.user = SimpleNamespace(id="user-1")
+        self.record_run = patch.object(
+            routes,
+            "_record_ai_run",
+            return_value={
+                "id": "run-1",
+                "status": "succeeded",
+                "retrieval_count": 0,
+                "latency_ms": 10,
+            },
+        ).start()
+        self.addCleanup(patch.stopall)
         self.citations = [
             {
                 "index": 1,
@@ -62,7 +73,7 @@ class DashboardChatRouteTests(unittest.TestCase):
             patch.object(
                 routes,
                 "_persist_dashboard_exchange",
-                return_value=("conversation-1", False),
+                return_value=("conversation-1", "message-1", False),
             ) as persist,
             patch.object(routes, "record_activity"),
         ):
@@ -128,7 +139,7 @@ class DashboardChatRouteTests(unittest.TestCase):
             patch.object(
                 routes,
                 "_persist_dashboard_exchange",
-                return_value=("conversation-1", False),
+                return_value=("conversation-1", "message-1", False),
             ),
             patch.object(routes, "record_activity"),
         ):
@@ -154,7 +165,7 @@ class DashboardChatRouteTests(unittest.TestCase):
             patch.object(
                 routes,
                 "_persist_dashboard_exchange",
-                return_value=(None, True),
+                return_value=(None, None, True),
             ),
             patch.object(routes, "record_activity"),
         ):
@@ -198,7 +209,7 @@ class DashboardChatRouteTests(unittest.TestCase):
             patch.object(
                 routes,
                 "_persist_dashboard_exchange",
-                return_value=("conversation-1", False),
+                return_value=("conversation-1", "message-1", False),
             ),
             patch.object(routes, "record_activity"),
         ):
