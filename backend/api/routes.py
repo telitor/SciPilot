@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import quote
 
 import requests
+from pydantic import ValidationError
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -43,10 +44,15 @@ from api.dependencies import (
 )
 from api.schemas import (
     AgentKnowledgeAskRequest,
+    ArtifactDetailResponse,
+    ArtifactRestoreRequest,
+    ArtifactRevisionRequest,
+    ArtifactVersionListResponse,
     ChatResponse,
     CodeReproductionResponse,
     DashboardChatRequest,
     CreateConversationRequest,
+    CreateProjectMemoryRequest,
     CreateResearchProjectRequest,
     DiagnoseRequest,
     ExperimentRoadmapRequest,
@@ -56,6 +62,8 @@ from api.schemas import (
     LoginRequest,
     NewMessageRequest,
     ProjectAssignmentRequest,
+    ProjectMemoryListResponse,
+    ProjectMemoryResponse,
     PaperUploadJobResponse,
     RegisterRequest,
     RepoAnalysisRequest,
@@ -66,6 +74,7 @@ from api.schemas import (
     ResultAnalysisResponse,
     UpdateResearchProjectRequest,
     UpdateProfileRequest,
+    UpdateProjectMemoryRequest,
 )
 from services.finetuned_model_service import (
     call_finetuned_model,
@@ -322,11 +331,13 @@ def _save_artifact(
     content: dict[str, Any],
     project_id: str | None = None,
 ) -> dict[str, Any]:
+    artifact_id = str(uuid.uuid4())
     result = (
         database()
         .table("research_artifacts")
         .insert(
             {
+                "id": artifact_id,
                 "user_id": user_id,
                 "artifact_type": artifact_type,
                 "title": title[:500],
@@ -334,12 +345,204 @@ def _save_artifact(
                 "content": content,
                 "project_id": project_id,
                 "status": "completed",
+                "review_status": "draft",
+                "version_group_id": artifact_id,
+                "version": 1,
             }
         )
         .execute()
     )
     if not result.data:
         raise HTTPException(status_code=500, detail="保存研究结果失败")
+    return result.data[0]
+
+
+ARTIFACT_RESPONSE_MODELS = {
+    "research-decomposition": ResearchTreeResponse,
+    "experiment-roadmap": ExperimentRoadmapResponse,
+    "code-reproduction": CodeReproductionResponse,
+    "result-analysis": ResultAnalysisResponse,
+}
+ARTIFACT_METADATA_FIELDS = {
+    "id",
+    "project_id",
+    "review_status",
+    "version_group_id",
+    "version",
+    "parent_version_id",
+    "confirmed_at",
+    "created_at",
+    "updated_at",
+}
+
+
+def _artifact_response(artifact: dict[str, Any]) -> dict[str, Any]:
+    content = artifact.get("content")
+    if not isinstance(content, dict):
+        content = {}
+    return {
+        "id": str(artifact["id"]),
+        "project_id": artifact.get("project_id"),
+        "review_status": str(artifact.get("review_status") or "draft"),
+        "version_group_id": str(artifact.get("version_group_id") or artifact["id"]),
+        "version": int(artifact.get("version") or 1),
+        "parent_version_id": artifact.get("parent_version_id"),
+        "confirmed_at": artifact.get("confirmed_at"),
+        "created_at": artifact.get("created_at"),
+        "updated_at": artifact.get("updated_at"),
+        **content,
+    }
+
+
+def _artifact_detail_response(artifact: dict[str, Any]) -> dict[str, Any]:
+    metadata = _artifact_response(artifact)
+    return {
+        "artifact_type": str(artifact.get("artifact_type") or ""),
+        "title": str(artifact.get("title") or "未命名产物"),
+        "content": artifact.get("content")
+        if isinstance(artifact.get("content"), dict)
+        else {},
+        **{
+            key: value
+            for key, value in metadata.items()
+            if key in ARTIFACT_METADATA_FIELDS
+        },
+    }
+
+
+def _validate_artifact_content(
+    artifact_type: str,
+    content: dict[str, Any],
+    project_id: str | None,
+) -> dict[str, Any]:
+    response_model = ARTIFACT_RESPONSE_MODELS.get(artifact_type)
+    if response_model is None:
+        raise HTTPException(status_code=400, detail="该类型产物暂不支持编辑")
+    candidate = {
+        "id": str(uuid.uuid4()),
+        "project_id": project_id,
+        "review_status": "draft",
+        "version_group_id": str(uuid.uuid4()),
+        "version": 1,
+        **content,
+    }
+    try:
+        validated = response_model.model_validate(candidate).model_dump(exclude_none=True)
+    except ValidationError as exc:
+        message = exc.errors(include_url=False)[0].get("msg", "内容格式不正确")
+        raise HTTPException(
+            status_code=422,
+            detail=f"产物内容格式不正确：{message}",
+        ) from None
+    return {
+        key: value
+        for key, value in validated.items()
+        if key not in ARTIFACT_METADATA_FIELDS
+    }
+
+
+def _latest_artifact_version(artifact: dict[str, Any], user_id: str) -> dict[str, Any]:
+    version_group_id = str(artifact.get("version_group_id") or artifact["id"])
+    result = (
+        database()
+        .table("research_artifacts")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("version_group_id", version_group_id)
+        .order("version", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="产物版本不存在")
+    return result.data[0]
+
+
+def _latest_confirmed_artifact(
+    artifact: dict[str, Any],
+    user_id: str,
+) -> dict[str, Any] | None:
+    version_group_id = str(artifact.get("version_group_id") or artifact["id"])
+    result = (
+        database()
+        .table("research_artifacts")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("version_group_id", version_group_id)
+        .eq("review_status", "confirmed")
+        .eq("status", "completed")
+        .order("version", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def _resolve_confirmed_artifact(
+    artifact_id: str,
+    user_id: str,
+    expected_type: str,
+) -> dict[str, Any]:
+    source = require_owned_row("research_artifacts", artifact_id, user_id)
+    if source.get("artifact_type") != expected_type:
+        type_errors = {
+            "research-decomposition": "上游产物不是研究问题拆解结果",
+            "experiment-roadmap": "上游产物不是实验路线",
+            "code-reproduction": "上游产物不是代码复现分析",
+        }
+        raise HTTPException(
+            status_code=400,
+            detail=type_errors.get(expected_type, "上游产物类型不正确"),
+        )
+    confirmed = _latest_confirmed_artifact(source, user_id)
+    if confirmed is None:
+        raise HTTPException(status_code=409, detail="请先确认上游产物，再继续下一阶段")
+    return confirmed
+
+
+def _insert_artifact_revision(
+    source: dict[str, Any],
+    latest: dict[str, Any],
+    user_id: str,
+    *,
+    title: str,
+    content: dict[str, Any],
+    revision_note: str | None,
+) -> dict[str, Any]:
+    source_input = source.get("input") if isinstance(source.get("input"), dict) else {}
+    revision_input = {
+        **source_input,
+        "_revision": {
+            "source_artifact_id": str(source["id"]),
+            "note": revision_note,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+    payload = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "conversation_id": source.get("conversation_id"),
+        "paper_id": source.get("paper_id"),
+        "project_id": source.get("project_id"),
+        "artifact_type": source.get("artifact_type"),
+        "title": title[:500],
+        "input": revision_input,
+        "content": content,
+        "status": "completed",
+        "review_status": "draft",
+        "version_group_id": str(source.get("version_group_id") or source["id"]),
+        "version": int(latest.get("version") or 1) + 1,
+        "parent_version_id": str(source["id"]),
+    }
+    try:
+        result = database().table("research_artifacts").insert(payload).execute()
+    except Exception:
+        raise HTTPException(
+            status_code=409,
+            detail="产物已产生新版本，请刷新后重新编辑",
+        ) from None
+    if not result.data:
+        raise HTTPException(status_code=500, detail="保存产物版本失败")
     return result.data[0]
 
 
@@ -1392,6 +1595,162 @@ def _artifact_context_excerpt(artifact: dict[str, Any]) -> str:
     return f"{artifact_type}：{title}\n" + "\n".join(cleaned)[:1800]
 
 
+def _artifact_memory_payload(artifact: dict[str, Any], user_id: str) -> dict[str, Any]:
+    source_id = str(artifact.get("version_group_id") or artifact["id"])
+    title = str(artifact.get("title") or "已确认科研产物").strip()
+    return {
+        "user_id": user_id,
+        "project_id": str(artifact["project_id"]),
+        "memory_type": "artifact-summary",
+        "title": f"已确认产物：{title}"[:200],
+        "content": _artifact_context_excerpt(artifact)[:8000],
+        "source_type": "artifact",
+        "source_id": source_id,
+        "source_version": int(artifact.get("version") or 1),
+        "status": "active",
+        "metadata": {
+            "artifact_type": artifact.get("artifact_type"),
+            "artifact_id": str(artifact["id"]),
+        },
+    }
+
+
+def _sync_artifact_memory(artifact: dict[str, Any], user_id: str) -> bool:
+    if not artifact.get("project_id") or artifact.get("review_status") != "confirmed":
+        return False
+    payload = _artifact_memory_payload(artifact, user_id)
+    try:
+        existing = (
+            database()
+            .table("project_memories")
+            .select("id,status")
+            .eq("user_id", user_id)
+            .eq("project_id", payload["project_id"])
+            .eq("source_type", "artifact")
+            .eq("source_id", payload["source_id"])
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            # Respect a user's archived state while refreshing the source version.
+            update_payload = {
+                key: value
+                for key, value in payload.items()
+                if key not in {"user_id", "project_id", "source_type", "source_id", "status"}
+            }
+            result = (
+                database()
+                .table("project_memories")
+                .update(update_payload)
+                .eq("id", existing.data[0]["id"])
+                .eq("user_id", user_id)
+                .execute()
+            )
+        else:
+            result = database().table("project_memories").insert(payload).execute()
+        return bool(result.data)
+    except Exception as exc:
+        logger.warning(
+            "Unable to sync project memory project=%s source=%s error=%s",
+            payload["project_id"],
+            payload["source_id"],
+            type(exc).__name__,
+        )
+        return False
+
+
+def _refresh_artifact_memory(artifact: dict[str, Any], user_id: str) -> None:
+    if not artifact.get("project_id"):
+        return
+    source_id = str(artifact.get("version_group_id") or artifact["id"])
+    latest_confirmed = _latest_confirmed_artifact(artifact, user_id)
+    if latest_confirmed:
+        _sync_artifact_memory(latest_confirmed, user_id)
+        return
+    try:
+        (
+            database()
+            .table("project_memories")
+            .update({"status": "archived"})
+            .eq("user_id", user_id)
+            .eq("project_id", str(artifact["project_id"]))
+            .eq("source_type", "artifact")
+            .eq("source_id", source_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning(
+            "Unable to archive project memory project=%s source=%s error=%s",
+            artifact["project_id"],
+            source_id,
+            type(exc).__name__,
+        )
+
+
+def _reassign_artifact_memory(
+    version_group_id: str,
+    user_id: str,
+    project_id: str | None,
+) -> None:
+    try:
+        updates = {"project_id": project_id} if project_id else {"status": "archived"}
+        (
+            database()
+            .table("project_memories")
+            .update(updates)
+            .eq("user_id", user_id)
+            .eq("source_type", "artifact")
+            .eq("source_id", version_group_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.info(
+            "Unable to reassign project memory source=%s error=%s",
+            version_group_id,
+            type(exc).__name__,
+        )
+
+
+def _active_project_memory_blocks(project_id: str, user_id: str) -> list[str]:
+    try:
+        rows = (
+            database()
+            .table("project_memories")
+            .select(
+                "id,memory_type,title,content,source_type,source_version,updated_at"
+            )
+            .eq("user_id", user_id)
+            .eq("project_id", project_id)
+            .eq("status", "active")
+            .order("updated_at", desc=True)
+            .limit(20)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        logger.info(
+            "Project memory unavailable project=%s error=%s",
+            project_id,
+            type(exc).__name__,
+        )
+        return []
+
+    blocks: list[str] = []
+    for item in rows:
+        memory_type = str(item.get("memory_type") or "fact")
+        source = (
+            f"产物版本 v{item.get('source_version')}"
+            if item.get("source_type") == "artifact" and item.get("source_version")
+            else "用户记录"
+        )
+        blocks.append(
+            f"项目记忆[{memory_type}，{source}]：{item.get('title') or '未命名'}\n"
+            f"{str(item.get('content') or '')[:2000]}"
+        )
+    return blocks
+
+
 def _project_context_summary(project_id: str | None, user_id: str) -> str:
     if not project_id:
         return ""
@@ -1401,6 +1760,7 @@ def _project_context_summary(project_id: str | None, user_id: str) -> str:
             f"项目名称：{project.get('name') or '未命名项目'}",
             f"研究目标：{project.get('objective') or '尚未填写'}",
         ]
+        blocks.extend(_active_project_memory_blocks(project_id, user_id))
         papers = (
             database()
             .table("papers")
@@ -1428,16 +1788,31 @@ def _project_context_summary(project_id: str | None, user_id: str) -> str:
         artifacts = (
             database()
             .table("research_artifacts")
-            .select("id,title,artifact_type,content,updated_at")
+            .select(
+                "id,title,artifact_type,content,version_group_id,version,updated_at"
+            )
             .eq("user_id", user_id)
             .eq("project_id", project_id)
+            .eq("review_status", "confirmed")
+            .eq("status", "completed")
+            .order("version", desc=True)
             .order("updated_at", desc=True)
-            .limit(8)
+            .limit(24)
             .execute()
             .data
             or []
         )
-        blocks.extend(_artifact_context_excerpt(item) for item in artifacts)
+        latest_confirmed: list[dict[str, Any]] = []
+        seen_groups: set[str] = set()
+        for item in artifacts:
+            group_id = str(item.get("version_group_id") or item.get("id"))
+            if group_id in seen_groups:
+                continue
+            seen_groups.add(group_id)
+            latest_confirmed.append(item)
+            if len(latest_confirmed) >= 8:
+                break
+        blocks.extend(_artifact_context_excerpt(item) for item in latest_confirmed)
         return "\n\n".join(blocks)[:10_000]
     except Exception as exc:
         logger.warning(
@@ -1607,6 +1982,123 @@ def get_project(project_id: str, user=Depends(get_current_user)):
     }
 
 
+@router.get(
+    "/projects/{project_id}/memories",
+    response_model=ProjectMemoryListResponse,
+)
+def list_project_memories(
+    project_id: str,
+    include_archived: bool = False,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    _require_project(project_id, user_id)
+    query = (
+        database()
+        .table("project_memories")
+        .select(
+            "id,project_id,memory_type,title,content,source_type,source_id,"
+            "source_version,status,created_at,updated_at",
+            count="exact",
+        )
+        .eq("user_id", user_id)
+        .eq("project_id", project_id)
+    )
+    if not include_archived:
+        query = query.eq("status", "active")
+    result = query.order("updated_at", desc=True).limit(100).execute()
+    items = result.data or []
+    return {
+        "items": items,
+        "total": result.count if result.count is not None else len(items),
+    }
+
+
+@router.post(
+    "/projects/{project_id}/memories",
+    response_model=ProjectMemoryResponse,
+)
+def create_project_memory(
+    project_id: str,
+    payload: CreateProjectMemoryRequest,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    _require_project(project_id, user_id, writable=True)
+    result = (
+        database()
+        .table("project_memories")
+        .insert(
+            {
+                "user_id": user_id,
+                "project_id": project_id,
+                "memory_type": payload.memory_type,
+                "title": payload.title,
+                "content": payload.content,
+                "source_type": "manual",
+                "status": "active",
+            }
+        )
+        .execute()
+    )
+    memory = _first(result)
+    if not memory:
+        raise HTTPException(status_code=500, detail="保存项目记忆失败")
+    record_activity(
+        user_id,
+        "project-memory",
+        "新增项目记忆",
+        memory["title"],
+        entity_type="project-memory",
+        entity_id=str(memory["id"]),
+        project_id=project_id,
+    )
+    return memory
+
+
+@router.patch(
+    "/projects/{project_id}/memories/{memory_id}",
+    response_model=ProjectMemoryResponse,
+)
+def update_project_memory(
+    project_id: str,
+    memory_id: str,
+    payload: UpdateProjectMemoryRequest,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    _require_project(project_id, user_id, writable=True)
+    memory = require_owned_row("project_memories", memory_id, user_id)
+    if str(memory.get("project_id")) != project_id:
+        raise HTTPException(status_code=404, detail="项目记忆不存在")
+    updates = payload.model_dump(exclude_unset=True)
+    result = (
+        database()
+        .table("project_memories")
+        .update(updates)
+        .eq("id", memory_id)
+        .eq("user_id", user_id)
+        .eq("project_id", project_id)
+        .execute()
+    )
+    updated = _first(result)
+    if not updated:
+        raise HTTPException(status_code=409, detail="项目记忆已发生变化，请刷新后重试")
+    action = "停用项目记忆" if updates.get("status") == "archived" else "更新项目记忆"
+    if updates.get("status") == "active":
+        action = "恢复项目记忆"
+    record_activity(
+        user_id,
+        "project-memory",
+        action,
+        updated["title"],
+        entity_type="project-memory",
+        entity_id=str(updated["id"]),
+        project_id=project_id,
+    )
+    return updated
+
+
 @router.patch("/projects/{project_id}")
 def update_project(
     project_id: str,
@@ -1685,19 +2177,35 @@ def assign_project_asset(
     if not table:
         raise HTTPException(status_code=400, detail="不支持的项目资产类型")
     user_id = str(user.id)
-    require_owned_row(table, asset_id, user_id)
+    owned_asset = require_owned_row(table, asset_id, user_id)
     project_id = _validated_project_id(payload.project_id, user_id)
-    result = (
+    update_query = (
         database()
         .table(table)
         .update({"project_id": project_id})
-        .eq("id", asset_id)
         .eq("user_id", user_id)
-        .execute()
     )
-    asset = _first(result)
+    version_group_id = None
+    if asset_type == "artifact":
+        version_group_id = str(
+            owned_asset.get("version_group_id") or owned_asset["id"]
+        )
+        update_query = update_query.eq("version_group_id", version_group_id)
+    else:
+        update_query = update_query.eq("id", asset_id)
+    result = update_query.execute()
+    asset = next(
+        (item for item in (result.data or []) if str(item.get("id")) == asset_id),
+        _first(result),
+    )
     if not asset:
         raise HTTPException(status_code=500, detail="更新项目资产归属失败")
+    if version_group_id:
+        _reassign_artifact_memory(version_group_id, user_id, project_id)
+        if project_id:
+            latest_confirmed = _latest_confirmed_artifact(asset, user_id)
+            if latest_confirmed:
+                _sync_artifact_memory(latest_confirmed, user_id)
     return asset
 
 
@@ -3028,6 +3536,202 @@ def _normalize_research_tree(raw_text: str, direction: str) -> dict[str, Any]:
     }
 
 
+@router.get(
+    "/artifacts/{artifact_id}/versions",
+    response_model=ArtifactVersionListResponse,
+)
+def list_artifact_versions(artifact_id: str, user=Depends(get_current_user)):
+    user_id = str(user.id)
+    artifact = require_owned_row("research_artifacts", artifact_id, user_id)
+    version_group_id = str(artifact.get("version_group_id") or artifact["id"])
+    result = (
+        database()
+        .table("research_artifacts")
+        .select(
+            "id,title,review_status,version,parent_version_id,"
+            "confirmed_at,created_at,updated_at"
+        )
+        .eq("user_id", user_id)
+        .eq("version_group_id", version_group_id)
+        .order("version", desc=True)
+        .execute()
+    )
+    items = result.data or []
+    if not items:
+        raise HTTPException(status_code=404, detail="产物版本不存在")
+    return {
+        "version_group_id": version_group_id,
+        "latest_version": int(items[0].get("version") or 1),
+        "items": items,
+    }
+
+
+@router.patch(
+    "/artifacts/{artifact_id}",
+    response_model=ArtifactDetailResponse,
+)
+def revise_artifact(
+    artifact_id: str,
+    payload: ArtifactRevisionRequest,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    source = require_owned_row("research_artifacts", artifact_id, user_id)
+    latest = _latest_artifact_version(source, user_id)
+    if str(latest["id"]) != str(source["id"]):
+        raise HTTPException(status_code=409, detail="当前不是最新版本，请刷新后重新编辑")
+    if source.get("review_status") == "deprecated":
+        raise HTTPException(status_code=409, detail="已废弃版本请使用恢复功能")
+    content = _validate_artifact_content(
+        str(source.get("artifact_type") or ""),
+        payload.content,
+        source.get("project_id"),
+    )
+    revised = _insert_artifact_revision(
+        source,
+        latest,
+        user_id,
+        title=payload.title or str(source.get("title") or "未命名产物"),
+        content=content,
+        revision_note=payload.revision_note,
+    )
+    record_activity(
+        user_id,
+        "artifact",
+        "编辑科研产物",
+        str(revised.get("title") or "未命名产物"),
+        entity_type="artifact",
+        entity_id=str(revised["id"]),
+        project_id=revised.get("project_id"),
+        metadata={"version": revised.get("version")},
+    )
+    return _artifact_detail_response(revised)
+
+
+@router.post(
+    "/artifacts/{artifact_id}/confirm",
+    response_model=ArtifactDetailResponse,
+)
+def confirm_artifact(artifact_id: str, user=Depends(get_current_user)):
+    user_id = str(user.id)
+    artifact = require_owned_row("research_artifacts", artifact_id, user_id)
+    latest = _latest_artifact_version(artifact, user_id)
+    if str(latest["id"]) != str(artifact["id"]):
+        raise HTTPException(status_code=409, detail="只能确认最新版本")
+    if artifact.get("review_status") == "deprecated":
+        raise HTTPException(status_code=409, detail="已废弃版本不能确认，请先恢复")
+    if artifact.get("status") != "completed":
+        raise HTTPException(status_code=409, detail="产物尚未生成完成")
+    if artifact.get("review_status") == "confirmed":
+        _sync_artifact_memory(artifact, user_id)
+        return _artifact_detail_response(artifact)
+    now = datetime.now(timezone.utc).isoformat()
+    result = (
+        database()
+        .table("research_artifacts")
+        .update(
+            {
+                "review_status": "confirmed",
+                "confirmed_at": now,
+                "confirmed_by": user_id,
+            }
+        )
+        .eq("id", artifact_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=409, detail="确认失败，请刷新后重试")
+    confirmed = result.data[0]
+    record_activity(
+        user_id,
+        "artifact",
+        "确认科研产物",
+        str(confirmed.get("title") or "未命名产物"),
+        entity_type="artifact",
+        entity_id=str(confirmed["id"]),
+        project_id=confirmed.get("project_id"),
+        metadata={"version": confirmed.get("version")},
+    )
+    _sync_artifact_memory(confirmed, user_id)
+    return _artifact_detail_response(confirmed)
+
+
+@router.post(
+    "/artifacts/{artifact_id}/deprecate",
+    response_model=ArtifactDetailResponse,
+)
+def deprecate_artifact(artifact_id: str, user=Depends(get_current_user)):
+    user_id = str(user.id)
+    artifact = require_owned_row("research_artifacts", artifact_id, user_id)
+    if artifact.get("review_status") == "deprecated":
+        return _artifact_detail_response(artifact)
+    result = (
+        database()
+        .table("research_artifacts")
+        .update({"review_status": "deprecated"})
+        .eq("id", artifact_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=409, detail="废弃版本失败，请刷新后重试")
+    deprecated = result.data[0]
+    record_activity(
+        user_id,
+        "artifact",
+        "废弃科研产物版本",
+        str(deprecated.get("title") or "未命名产物"),
+        entity_type="artifact",
+        entity_id=str(deprecated["id"]),
+        project_id=deprecated.get("project_id"),
+        metadata={"version": deprecated.get("version")},
+    )
+    _refresh_artifact_memory(deprecated, user_id)
+    return _artifact_detail_response(deprecated)
+
+
+@router.post(
+    "/artifacts/{artifact_id}/restore",
+    response_model=ArtifactDetailResponse,
+)
+def restore_artifact(
+    artifact_id: str,
+    payload: ArtifactRestoreRequest,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    source = require_owned_row("research_artifacts", artifact_id, user_id)
+    latest = _latest_artifact_version(source, user_id)
+    content = _validate_artifact_content(
+        str(source.get("artifact_type") or ""),
+        source.get("content") if isinstance(source.get("content"), dict) else {},
+        source.get("project_id"),
+    )
+    restored = _insert_artifact_revision(
+        source,
+        latest,
+        user_id,
+        title=str(source.get("title") or "未命名产物"),
+        content=content,
+        revision_note=payload.revision_note or f"恢复版本 v{source.get('version') or 1}",
+    )
+    record_activity(
+        user_id,
+        "artifact",
+        "恢复科研产物版本",
+        str(restored.get("title") or "未命名产物"),
+        entity_type="artifact",
+        entity_id=str(restored["id"]),
+        project_id=restored.get("project_id"),
+        metadata={
+            "version": restored.get("version"),
+            "restored_from": artifact_id,
+        },
+    )
+    return _artifact_detail_response(restored)
+
+
 @router.post("/research/decompose", response_model=ResearchTreeResponse)
 def decompose_research(payload: ResearchDecomposeRequest, user=Depends(get_current_user)):
     user_id = str(user.id)
@@ -3105,7 +3809,7 @@ def decompose_research(payload: ResearchDecomposeRequest, user=Depends(get_curre
         entity_id=artifact["id"],
         project_id=project_id,
     )
-    return {"id": artifact["id"], "project_id": project_id, **content}
+    return _artifact_response(artifact)
 
 
 @router.post(
@@ -3144,11 +3848,7 @@ def enqueue_research_decomposition(
 @router.get("/research/{artifact_id}", response_model=ResearchTreeResponse)
 def get_research(artifact_id: str, user=Depends(get_current_user)):
     artifact = require_owned_row("research_artifacts", artifact_id, str(user.id))
-    return {
-        "id": artifact["id"],
-        "project_id": artifact.get("project_id"),
-        **(artifact.get("content") or {}),
-    }
+    return _artifact_response(artifact)
 
 
 def _normalize_roadmap(raw_text: str, objective: str) -> dict[str, Any]:
@@ -3197,9 +3897,11 @@ def generate_roadmap(payload: ExperimentRoadmapRequest, user=Depends(get_current
     user_id = str(user.id)
     source = None
     if payload.question_id != "manual":
-        source = require_owned_row("research_artifacts", payload.question_id, user_id)
-        if source.get("artifact_type") != "research-decomposition":
-            raise HTTPException(status_code=400, detail="上游产物不是研究问题拆解结果")
+        source = _resolve_confirmed_artifact(
+            payload.question_id,
+            user_id,
+            "research-decomposition",
+        )
     inherited_project_id = source.get("project_id") if source else None
     project_id = _resolve_linked_project_id(
         payload.project_id,
@@ -3322,7 +4024,7 @@ def generate_roadmap(payload: ExperimentRoadmapRequest, user=Depends(get_current
         entity_id=artifact["id"],
         project_id=project_id,
     )
-    return {"id": artifact["id"], "project_id": project_id, **content}
+    return _artifact_response(artifact)
 
 
 @router.post(
@@ -3337,9 +4039,11 @@ def enqueue_experiment_roadmap(
     user_id = str(user.id)
     source = None
     if payload.question_id != "manual":
-        source = require_owned_row("research_artifacts", payload.question_id, user_id)
-        if source.get("artifact_type") != "research-decomposition":
-            raise HTTPException(status_code=400, detail="上游产物不是研究问题拆解结果")
+        source = _resolve_confirmed_artifact(
+            payload.question_id,
+            user_id,
+            "research-decomposition",
+        )
     project_id = _resolve_linked_project_id(
         str(payload.project_id) if payload.project_id else None,
         source.get("project_id") if source else None,
@@ -3358,11 +4062,7 @@ def enqueue_experiment_roadmap(
 @router.get("/experiments/{artifact_id}", response_model=ExperimentRoadmapResponse)
 def get_roadmap(artifact_id: str, user=Depends(get_current_user)):
     artifact = require_owned_row("research_artifacts", artifact_id, str(user.id))
-    return {
-        "id": artifact["id"],
-        "project_id": artifact.get("project_id"),
-        **(artifact.get("content") or {}),
-    }
+    return _artifact_response(artifact)
 
 
 def _github_json(url: str) -> dict[str, Any]:
@@ -3545,13 +4245,11 @@ def analyze_repository(payload: RepoAnalysisRequest, user=Depends(get_current_us
     user_id = str(user.id)
     source_roadmap = None
     if payload.roadmap_id:
-        source_roadmap = require_owned_row(
-            "research_artifacts",
+        source_roadmap = _resolve_confirmed_artifact(
             payload.roadmap_id,
             user_id,
+            "experiment-roadmap",
         )
-        if source_roadmap.get("artifact_type") != "experiment-roadmap":
-            raise HTTPException(status_code=400, detail="上游产物不是实验路线")
     project_id = _resolve_linked_project_id(
         payload.project_id,
         source_roadmap.get("project_id") if source_roadmap else None,
@@ -3625,7 +4323,7 @@ def analyze_repository(payload: RepoAnalysisRequest, user=Depends(get_current_us
         entity_id=artifact["id"],
         project_id=project_id,
     )
-    return {"id": artifact["id"], "project_id": project_id, **content}
+    return _artifact_response(artifact)
 
 
 @router.post(
@@ -3640,13 +4338,11 @@ def enqueue_repository_analysis(
     user_id = str(user.id)
     source_roadmap = None
     if payload.roadmap_id:
-        source_roadmap = require_owned_row(
-            "research_artifacts",
+        source_roadmap = _resolve_confirmed_artifact(
             payload.roadmap_id,
             user_id,
+            "experiment-roadmap",
         )
-        if source_roadmap.get("artifact_type") != "experiment-roadmap":
-            raise HTTPException(status_code=400, detail="上游产物不是实验路线")
     project_id = _resolve_linked_project_id(
         str(payload.project_id) if payload.project_id else None,
         source_roadmap.get("project_id") if source_roadmap else None,
@@ -3670,19 +4366,17 @@ def enqueue_repository_analysis(
 @router.get("/code/{artifact_id}", response_model=CodeReproductionResponse)
 def get_repository_analysis(artifact_id: str, user=Depends(get_current_user)):
     artifact = require_owned_row("research_artifacts", artifact_id, str(user.id))
-    return {
-        "id": artifact["id"],
-        "project_id": artifact.get("project_id"),
-        **(artifact.get("content") or {}),
-    }
+    return _artifact_response(artifact)
 
 
 @router.post("/code/diagnose")
 def diagnose_repository(payload: DiagnoseRequest, user=Depends(get_current_user)):
     user_id = str(user.id)
-    artifact = require_owned_row("research_artifacts", payload.repo_id, user_id)
-    if artifact.get("artifact_type") != "code-reproduction":
-        raise HTTPException(status_code=400, detail="该记录不是代码复现仓库")
+    artifact = _resolve_confirmed_artifact(
+        payload.repo_id,
+        user_id,
+        "code-reproduction",
+    )
     agent = _pick_agent("code")
     content = artifact.get("content") if isinstance(artifact.get("content"), dict) else {}
     prompt = f"""请诊断下面代码仓库复现过程中的错误。
@@ -3772,13 +4466,11 @@ def _analyze_result_summary(
 ) -> dict[str, Any]:
     source_repository = None
     if repo_id:
-        source_repository = require_owned_row(
-            "research_artifacts",
+        source_repository = _resolve_confirmed_artifact(
             repo_id,
             user_id,
+            "code-reproduction",
         )
-        if source_repository.get("artifact_type") != "code-reproduction":
-            raise HTTPException(status_code=400, detail="上游产物不是代码复现分析")
     resolved_project_id = _resolve_linked_project_id(
         project_id,
         source_repository.get("project_id") if source_repository else None,
@@ -3866,7 +4558,7 @@ def _analyze_result_summary(
         entity_id=artifact["id"],
         project_id=resolved_project_id,
     )
-    return {"id": artifact["id"], "project_id": resolved_project_id, **result_content}
+    return _artifact_response(artifact)
 
 
 @router.post("/results/analyze", response_model=ResultAnalysisResponse)
@@ -3880,13 +4572,11 @@ async def analyze_results(
     user_id = str(user.id)
     source_repository = None
     if repo_id:
-        source_repository = require_owned_row(
-            "research_artifacts",
+        source_repository = _resolve_confirmed_artifact(
             repo_id,
             user_id,
+            "code-reproduction",
         )
-        if source_repository.get("artifact_type") != "code-reproduction":
-            raise HTTPException(status_code=400, detail="上游产物不是代码复现分析")
     project_id = _resolve_linked_project_id(
         project_id,
         source_repository.get("project_id") if source_repository else None,
@@ -4013,7 +4703,7 @@ async def analyze_results(
         entity_id=artifact["id"],
         project_id=project_id,
     )
-    return {"id": artifact["id"], "project_id": project_id, **result_content}
+    return _artifact_response(artifact)
 
 
 @router.post(
@@ -4031,13 +4721,11 @@ async def enqueue_result_analysis(
     user_id = str(user.id)
     source_repository = None
     if repo_id:
-        source_repository = require_owned_row(
-            "research_artifacts",
+        source_repository = _resolve_confirmed_artifact(
             repo_id,
             user_id,
+            "code-reproduction",
         )
-        if source_repository.get("artifact_type") != "code-reproduction":
-            raise HTTPException(status_code=400, detail="上游产物不是代码复现分析")
     resolved_project_id = _resolve_linked_project_id(
         project_id,
         source_repository.get("project_id") if source_repository else None,
@@ -4083,11 +4771,7 @@ async def enqueue_result_analysis(
 @router.get("/results/{artifact_id}", response_model=ResultAnalysisResponse)
 def get_result_analysis(artifact_id: str, user=Depends(get_current_user)):
     artifact = require_owned_row("research_artifacts", artifact_id, str(user.id))
-    return {
-        "id": artifact["id"],
-        "project_id": artifact.get("project_id"),
-        **(artifact.get("content") or {}),
-    }
+    return _artifact_response(artifact)
 
 
 @router.get("/resources")

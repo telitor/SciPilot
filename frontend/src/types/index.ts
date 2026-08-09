@@ -122,6 +122,48 @@ export interface Conversation {
 }
 
 // ==================== Research Types ====================
+export type ArtifactReviewStatus = 'draft' | 'confirmed' | 'deprecated';
+
+export interface ArtifactVersionMetadata {
+  id?: string;
+  project_id?: string | null;
+  review_status?: ArtifactReviewStatus;
+  version_group_id?: string;
+  version?: number;
+  parent_version_id?: string | null;
+  confirmed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ArtifactDetail<TContent extends Record<string, unknown> = Record<string, unknown>>
+  extends ArtifactVersionMetadata {
+  id: string;
+  artifact_type: string;
+  title: string;
+  content: TContent;
+  review_status: ArtifactReviewStatus;
+  version_group_id: string;
+  version: number;
+}
+
+export interface ArtifactVersionSummary {
+  id: string;
+  title: string;
+  review_status: ArtifactReviewStatus;
+  version: number;
+  parent_version_id?: string | null;
+  confirmed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ArtifactVersionList {
+  version_group_id: string;
+  latest_version: number;
+  items: ArtifactVersionSummary[];
+}
+
 export interface ResearchNode {
   id: string;
   question: string;
@@ -131,9 +173,7 @@ export interface ResearchNode {
   children?: ResearchNode[];
 }
 
-export interface ResearchTree {
-  id?: string;
-  project_id?: string | null;
+export interface ResearchTree extends ArtifactVersionMetadata {
   core_question: string;
   sub_questions: ResearchNode[];
   generation_mode?: string;
@@ -164,9 +204,7 @@ export interface Dataset {
   description?: string;
 }
 
-export interface ExperimentRoadmap {
-  id?: string;
-  project_id?: string | null;
+export interface ExperimentRoadmap extends ArtifactVersionMetadata {
   objective: string;
   steps: ExperimentStep[];
   baselines: Baseline[];
@@ -197,9 +235,7 @@ export interface ReproductionStep {
   checked: boolean;
 }
 
-export interface CodeReproduction {
-  id?: string;
-  project_id?: string | null;
+export interface CodeReproduction extends ArtifactVersionMetadata {
   repo_name: string;
   repo_url: string;
   language: string;
@@ -230,9 +266,7 @@ export interface StatsSummary {
   p_value?: number;
 }
 
-export interface ResultAnalysis {
-  id?: string;
-  project_id?: string | null;
+export interface ResultAnalysis extends ArtifactVersionMetadata {
   charts: ChartData[];
   stats: StatsSummary[];
   interpretation: string;
@@ -306,6 +340,35 @@ export interface UnassignedProjectAssets {
     conversations: number;
     artifacts: number;
   };
+}
+
+export type ProjectMemoryType =
+  | 'fact'
+  | 'decision'
+  | 'constraint'
+  | 'preference'
+  | 'lesson'
+  | 'artifact-summary';
+
+export type ProjectMemoryStatus = 'active' | 'archived';
+
+export interface ProjectMemory {
+  id: string;
+  project_id: string;
+  memory_type: ProjectMemoryType;
+  title: string;
+  content: string;
+  source_type: 'manual' | 'artifact';
+  source_id?: string | null;
+  source_version?: number | null;
+  status: ProjectMemoryStatus;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ProjectMemoryList {
+  items: ProjectMemory[];
+  total: number;
 }
 
 // ==================== Knowledge Graph Types ====================

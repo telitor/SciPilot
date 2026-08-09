@@ -19,6 +19,7 @@ import {
   Unlink,
 } from 'lucide-react';
 import { projectAPI } from '@/services/api';
+import ProjectMemoryPanel from '@/components/ProjectMemoryPanel';
 import { getApiErrorMessage } from '@/services/errors';
 import { useAuthStore } from '@/store/authStore';
 import { useProjectStore } from '@/store/projectStore';
@@ -506,6 +507,8 @@ function Projects() {
                 <div><h3 className="sci-section-title">项目会话</h3>{renderAssetRows(detail.assets.conversations, 'conversation', null)}</div>
                 <div><h3 className="sci-section-title">研究产物</h3>{renderAssetRows(detail.assets.artifacts, 'artifact', null)}</div>
               </div>
+
+              <ProjectMemoryPanel projectId={detail.id} />
             </>
           )}
         </section>

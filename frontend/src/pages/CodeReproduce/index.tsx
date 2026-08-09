@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Code2, Search, Folder, File, ChevronRight, ChevronDown, Copy, Check, Terminal, AlertCircle, Loader2, ArrowRight, BarChart3 } from 'lucide-react';
+import { Code2, Search, Folder, File, ChevronRight, ChevronDown, Copy, Check, Terminal, AlertCircle, Loader2, ArrowRight, BarChart3, ArrowUp, ArrowDown, Plus, Trash2 } from 'lucide-react';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
+import ArtifactReviewToolbar, { mergeArtifactDetail } from '@/components/ArtifactReviewToolbar';
 import ProjectContextBar from '@/components/ProjectContextBar';
 import { useDurableResearchJob } from '@/hooks/useDurableResearchJob';
-import { codeAPI } from '@/services/api';
+import { artifactAPI, codeAPI } from '@/services/api';
 import { getApiErrorMessage } from '@/services/errors';
 import { useAuthStore } from '@/store/authStore';
 import { useSelectedProjectId } from '@/store/projectStore';
 import { useUIStore } from '@/store/uiStore';
-import type { CodeReproduction, RepoFile } from '@/types';
+import type { CodeReproduction, RepoFile, ReproductionStep } from '@/types';
+
+function renumberReproductionSteps(steps: ReproductionStep[]) {
+  return steps.map((step, index) => ({ ...step, step: index + 1 }));
+}
 
 function FileTree({ files, depth = 0 }: { files: RepoFile[]; depth?: number }) {
   return (
@@ -68,6 +73,9 @@ function CodeReproduce() {
   const [repoUrl, setRepoUrl] = useState(incomingRepoUrl);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [reproduction, setReproduction] = useState<import('@/types').CodeReproduction | null>(null);
+  const [draftReproduction, setDraftReproduction] = useState<CodeReproduction | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
   const [errorLog, setErrorLog] = useState('');
   const [isDiagnosing, setIsDiagnosing] = useState(false);
@@ -76,6 +84,8 @@ function CodeReproduce() {
 
   const handleJobSucceeded = useCallback((result: CodeReproduction) => {
     setReproduction(result);
+    setDraftReproduction(null);
+    setIsEditing(false);
     setRepoUrl(result.repo_url);
     if (result.id) {
       localStorage.setItem(storageKey, result.id);
@@ -167,6 +177,10 @@ function CodeReproduce() {
       addNotification({ type: 'warning', message: '请先完成仓库分析', duration: 3000 });
       return;
     }
+    if (reproduction.review_status !== 'confirmed') {
+      addNotification({ type: 'warning', message: '请先确认当前代码复现方案', duration: 3000 });
+      return;
+    }
     setIsDiagnosing(true);
     try {
       const response = await codeAPI.diagnoseError(errorLog.trim(), reproduction.id);
@@ -180,6 +194,65 @@ function CodeReproduce() {
       });
     } finally {
       setIsDiagnosing(false);
+    }
+  };
+
+  const handleArtifactChanged = (detail: import('@/types').ArtifactDetail) => {
+    const nextReproduction = mergeArtifactDetail<CodeReproduction>(detail);
+    setReproduction(nextReproduction);
+    setDraftReproduction(null);
+    setIsEditing(false);
+    localStorage.setItem(storageKey, detail.id);
+  };
+
+  const startEditing = () => {
+    if (!reproduction) return;
+    setDraftReproduction(structuredClone(reproduction));
+    setIsEditing(true);
+  };
+
+  const updateDraftSteps = (steps: ReproductionStep[]) => {
+    if (!draftReproduction) return;
+    setDraftReproduction({
+      ...draftReproduction,
+      steps: renumberReproductionSteps(steps),
+    });
+  };
+
+  const saveRevision = async () => {
+    if (!reproduction?.id || !draftReproduction) return;
+    if (draftReproduction.steps.some((step) => !step.instruction.trim())) {
+      addNotification({ type: 'warning', message: '复现步骤说明不能为空', duration: 3000 });
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const response = await artifactAPI.revise(
+        reproduction.id,
+        {
+          repo_name: draftReproduction.repo_name,
+          repo_url: draftReproduction.repo_url,
+          language: draftReproduction.language,
+          stars: draftReproduction.stars,
+          description: draftReproduction.description,
+          file_tree: draftReproduction.file_tree,
+          dependencies: draftReproduction.dependencies,
+          steps: renumberReproductionSteps(draftReproduction.steps),
+          generation_mode: draftReproduction.generation_mode,
+        },
+        undefined,
+        '人工编辑代码复现步骤',
+      );
+      handleArtifactChanged(response.data);
+      addNotification({ type: 'success', message: '代码复现方案已保存为新草稿版本', duration: 3000 });
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        message: getApiErrorMessage(error, '代码复现方案保存失败'),
+        duration: 5000,
+      });
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -236,6 +309,19 @@ function CodeReproduce() {
 
       {reproduction && (
         <div className="space-y-6">
+          <ArtifactReviewToolbar
+            artifact={reproduction}
+            isEditing={isEditing}
+            isSaving={isSaving}
+            onEdit={startEditing}
+            onSave={() => void saveRevision()}
+            onCancel={() => {
+              setDraftReproduction(null);
+              setIsEditing(false);
+            }}
+            onArtifactChanged={handleArtifactChanged}
+          />
+
           {/* Repo Info */}
           <div className="sci-card-glow">
             <div className="flex items-start justify-between">
@@ -285,14 +371,53 @@ function CodeReproduce() {
             <div className="sci-card">
               <h3 className="sci-section-title mb-3">复现步骤</h3>
               <div className="space-y-3">
-                {reproduction.steps.map((step) => (
+                {(isEditing && draftReproduction ? draftReproduction.steps : reproduction.steps).map((step, index, steps) => (
                   <div key={step.step} className="flex items-start gap-3">
                     <div className="w-6 h-6 rounded-full bg-sci-primary/20 text-sci-accent text-xs flex items-center justify-center flex-shrink-0 mt-0.5">
                       {step.step}
                     </div>
                     <div className="flex-1">
-                      <p className="text-sm">{step.instruction}</p>
-                      {step.command && (
+                      {isEditing && draftReproduction ? (
+                        <div className="space-y-2">
+                          <textarea
+                            className="sci-input w-full resize-none text-sm"
+                            rows={2}
+                            value={step.instruction}
+                            onChange={(event) => updateDraftSteps(steps.map((item, stepIndex) => stepIndex === index ? { ...item, instruction: event.target.value } : item))}
+                            aria-label={`复现步骤 ${step.step}`}
+                          />
+                          <input
+                            className="sci-input w-full font-mono text-xs"
+                            value={step.command || ''}
+                            onChange={(event) => updateDraftSteps(steps.map((item, stepIndex) => stepIndex === index ? { ...item, command: event.target.value || undefined } : item))}
+                            placeholder="可选命令"
+                          />
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="flex items-center gap-2 text-xs text-sci-muted">
+                              <input
+                                type="checkbox"
+                                checked={step.checked}
+                                onChange={(event) => updateDraftSteps(steps.map((item, stepIndex) => stepIndex === index ? { ...item, checked: event.target.checked } : item))}
+                              />
+                              已完成
+                            </label>
+                            <div className="flex">
+                              <button type="button" disabled={index === 0} onClick={() => updateDraftSteps([...steps.slice(0, index - 1), step, steps[index - 1], ...steps.slice(index + 1)])} className="p-2 text-sci-muted hover:text-sci-accent" title="上移">
+                                <ArrowUp size={14} />
+                              </button>
+                              <button type="button" disabled={index === steps.length - 1} onClick={() => updateDraftSteps([...steps.slice(0, index), steps[index + 1], step, ...steps.slice(index + 2)])} className="p-2 text-sci-muted hover:text-sci-accent" title="下移">
+                                <ArrowDown size={14} />
+                              </button>
+                              <button type="button" onClick={() => updateDraftSteps(steps.filter((_, stepIndex) => stepIndex !== index))} className="p-2 text-sci-muted hover:text-sci-danger" title="删除步骤">
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-sm">{step.instruction}</p>
+                      )}
+                      {!isEditing && step.command && (
                         <div className="mt-2 flex items-center gap-2">
                           <code className="flex-1 bg-sci-bg3 px-3 py-1.5 rounded text-xs font-mono text-sci-accent">
                             {step.command}
@@ -308,6 +433,23 @@ function CodeReproduce() {
                     </div>
                   </div>
                 ))}
+                {isEditing && draftReproduction && (
+                  <button
+                    type="button"
+                    onClick={() => updateDraftSteps([
+                      ...draftReproduction.steps,
+                      {
+                        step: draftReproduction.steps.length + 1,
+                        instruction: '新的复现步骤',
+                        checked: false,
+                      },
+                    ])}
+                    className="sci-btn-secondary"
+                  >
+                    <Plus size={14} />
+                    添加步骤
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -329,7 +471,8 @@ function CodeReproduce() {
               />
               <button
                 onClick={handleDiagnose}
-                disabled={isDiagnosing}
+                disabled={isDiagnosing || reproduction.review_status !== 'confirmed'}
+                title={reproduction.review_status === 'confirmed' ? undefined : '请先确认当前代码复现方案'}
                 className="sci-btn-primary self-end"
               >
                 {isDiagnosing ? <Loader2 size={16} className="animate-spin" /> : <Terminal size={16} />}
@@ -359,6 +502,8 @@ function CodeReproduce() {
                 if (reproduction.id) params.set('repoId', reproduction.id);
                 navigate(`/result/analyze${params.toString() ? `?${params.toString()}` : ''}`);
               }}
+              disabled={reproduction.review_status !== 'confirmed' || isEditing}
+              title={reproduction.review_status === 'confirmed' ? undefined : '请先确认当前代码复现方案'}
               className="sci-btn-primary"
             >
               <BarChart3 size={16} />

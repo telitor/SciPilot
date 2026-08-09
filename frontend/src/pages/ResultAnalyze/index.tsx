@@ -1,6 +1,6 @@
 import { useCallback, useState, useMemo, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { BarChart3, TrendingUp, Download, FileSpreadsheet, Loader2, ArrowRight, FolderKanban } from 'lucide-react';
+import { BarChart3, TrendingUp, Download, FileSpreadsheet, Loader2, ArrowRight, FolderKanban, Plus, Trash2 } from 'lucide-react';
 import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts/core';
 import { BarChart, LineChart } from 'echarts/charts';
@@ -11,9 +11,10 @@ import {
 } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
+import ArtifactReviewToolbar, { mergeArtifactDetail } from '@/components/ArtifactReviewToolbar';
 import ProjectContextBar from '@/components/ProjectContextBar';
 import { useDurableResearchJob } from '@/hooks/useDurableResearchJob';
-import { resultAPI } from '@/services/api';
+import { artifactAPI, resultAPI } from '@/services/api';
 import { getApiErrorMessage } from '@/services/errors';
 import { useAuthStore } from '@/store/authStore';
 import { useSelectedProjectId } from '@/store/projectStore';
@@ -35,11 +36,16 @@ function ResultAnalyze() {
   const [file, setFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<import('@/types').ResultAnalysis | null>(null);
+  const [draftAnalysis, setDraftAnalysis] = useState<ResultAnalysis | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [chartReady, setChartReady] = useState(false);
   const { addNotification } = useUIStore();
 
   const handleJobSucceeded = useCallback((result: ResultAnalysis) => {
     setAnalysis(result);
+    setDraftAnalysis(null);
+    setIsEditing(false);
     if (result.id) {
       localStorage.setItem(storageKey, result.id);
       if (linkedRepoId) localStorage.setItem(sourceStorageKey, linkedRepoId);
@@ -122,6 +128,54 @@ function ResultAnalyze() {
       });
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  const handleArtifactChanged = (detail: import('@/types').ArtifactDetail) => {
+    const nextAnalysis = mergeArtifactDetail<ResultAnalysis>(detail);
+    setAnalysis(nextAnalysis);
+    setDraftAnalysis(null);
+    setIsEditing(false);
+    localStorage.setItem(storageKey, detail.id);
+  };
+
+  const startEditing = () => {
+    if (!analysis) return;
+    setDraftAnalysis(structuredClone(analysis));
+    setIsEditing(true);
+  };
+
+  const saveRevision = async () => {
+    if (!analysis?.id || !draftAnalysis) return;
+    if (!draftAnalysis.interpretation.trim()) {
+      addNotification({ type: 'warning', message: '分析结论不能为空', duration: 3000 });
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const response = await artifactAPI.revise(
+        analysis.id,
+        {
+          charts: draftAnalysis.charts,
+          stats: draftAnalysis.stats,
+          interpretation: draftAnalysis.interpretation.trim(),
+          suggestions: draftAnalysis.suggestions.map((item) => item.trim()).filter(Boolean),
+          row_count: draftAnalysis.row_count,
+          generation_mode: draftAnalysis.generation_mode,
+        },
+        undefined,
+        '人工修订结果分析结论',
+      );
+      handleArtifactChanged(response.data);
+      addNotification({ type: 'success', message: '分析结论已保存为新草稿版本', duration: 3000 });
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        message: getApiErrorMessage(error, '分析结论保存失败'),
+        duration: 5000,
+      });
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -297,6 +351,19 @@ function ResultAnalyze() {
 
       {analysis && (
         <div className="space-y-6">
+          <ArtifactReviewToolbar
+            artifact={analysis}
+            isEditing={isEditing}
+            isSaving={isSaving}
+            onEdit={startEditing}
+            onSave={() => void saveRevision()}
+            onCancel={() => {
+              setDraftAnalysis(null);
+              setIsEditing(false);
+            }}
+            onArtifactChanged={handleArtifactChanged}
+          />
+
           {/* Charts */}
           <div>
             <h2 className="sci-section-title mb-4">图表分析</h2>
@@ -366,18 +433,70 @@ function ResultAnalyze() {
           <div className="grid md:grid-cols-2 gap-4">
             <div className="sci-card">
               <h3 className="sci-section-title mb-3">分析结论</h3>
-              <p className="text-sm text-sci-muted leading-relaxed">{analysis.interpretation}</p>
+              {isEditing && draftAnalysis ? (
+                <textarea
+                  className="sci-input w-full resize-none text-sm leading-relaxed"
+                  rows={8}
+                  value={draftAnalysis.interpretation}
+                  onChange={(event) => setDraftAnalysis({
+                    ...draftAnalysis,
+                    interpretation: event.target.value,
+                  })}
+                />
+              ) : (
+                <p className="text-sm text-sci-muted leading-relaxed">{analysis.interpretation}</p>
+              )}
             </div>
             <div className="sci-card">
               <h3 className="sci-section-title mb-3">改进建议</h3>
-              <ul className="space-y-2">
-                {analysis.suggestions.map((suggestion, index) => (
-                  <li key={index} className="flex items-start gap-2 text-sm text-sci-muted">
-                    <TrendingUp size={14} className="text-sci-success mt-0.5 flex-shrink-0" />
-                    {suggestion}
-                  </li>
-                ))}
-              </ul>
+              {isEditing && draftAnalysis ? (
+                <div className="space-y-2">
+                  {draftAnalysis.suggestions.map((suggestion, index) => (
+                    <div key={index} className="flex items-center gap-2">
+                      <input
+                        className="sci-input flex-1 text-sm"
+                        value={suggestion}
+                        onChange={(event) => setDraftAnalysis({
+                          ...draftAnalysis,
+                          suggestions: draftAnalysis.suggestions.map((item, suggestionIndex) => suggestionIndex === index ? event.target.value : item),
+                        })}
+                        aria-label={`改进建议 ${index + 1}`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setDraftAnalysis({
+                          ...draftAnalysis,
+                          suggestions: draftAnalysis.suggestions.filter((_, suggestionIndex) => suggestionIndex !== index),
+                        })}
+                        className="p-2 text-sci-muted hover:text-sci-danger"
+                        title="删除建议"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setDraftAnalysis({
+                      ...draftAnalysis,
+                      suggestions: [...draftAnalysis.suggestions, '新的改进建议'],
+                    })}
+                    className="sci-btn-secondary"
+                  >
+                    <Plus size={14} />
+                    添加建议
+                  </button>
+                </div>
+              ) : (
+                <ul className="space-y-2">
+                  {analysis.suggestions.map((suggestion, index) => (
+                    <li key={index} className="flex items-start gap-2 text-sm text-sci-muted">
+                      <TrendingUp size={14} className="text-sci-success mt-0.5 flex-shrink-0" />
+                      {suggestion}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </div>
 

@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Clock, GitFork, Database, Wrench, CheckCircle2, Circle, Loader2, Download, ArrowRight, Code2 } from 'lucide-react';
+import { Clock, GitFork, Database, Wrench, CheckCircle2, Circle, Loader2, Download, ArrowRight, Code2, ArrowUp, ArrowDown, Plus, Trash2 } from 'lucide-react';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
+import ArtifactReviewToolbar, { mergeArtifactDetail } from '@/components/ArtifactReviewToolbar';
 import ProjectContextBar from '@/components/ProjectContextBar';
 import { useDurableResearchJob } from '@/hooks/useDurableResearchJob';
-import { experimentAPI } from '@/services/api';
+import { artifactAPI, experimentAPI } from '@/services/api';
 import { getApiErrorMessage } from '@/services/errors';
 import { useAuthStore } from '@/store/authStore';
 import { useSelectedProjectId } from '@/store/projectStore';
 import { useUIStore } from '@/store/uiStore';
-import type { ExperimentRoadmap as ExperimentRoadmapData } from '@/types';
+import type { ExperimentRoadmap as ExperimentRoadmapData, ExperimentStep } from '@/types';
+
+function renumberSteps(steps: ExperimentStep[]) {
+  return steps.map((step, index) => ({ ...step, step: index + 1 }));
+}
 
 function ExperimentRoadmap() {
   const selectedProjectId = useSelectedProjectId();
@@ -23,11 +28,16 @@ function ExperimentRoadmap() {
   const jobStorageKey = `${storageKey}:job-id`;
   const [objective, setObjective] = useState(incomingObjective);
   const [roadmap, setRoadmap] = useState<ExperimentRoadmapData | null>(null);
+  const [draftRoadmap, setDraftRoadmap] = useState<ExperimentRoadmapData | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const { addNotification } = useUIStore();
 
   const handleJobSucceeded = useCallback((result: ExperimentRoadmapData) => {
     setRoadmap(result);
+    setDraftRoadmap(null);
+    setIsEditing(false);
     if (result.id) {
       localStorage.setItem(storageKey, result.id);
       if (linkedQuestionId) localStorage.setItem(sourceStorageKey, linkedQuestionId);
@@ -102,6 +112,59 @@ function ExperimentRoadmap() {
     }
   };
 
+  const handleArtifactChanged = (detail: import('@/types').ArtifactDetail) => {
+    const nextRoadmap = mergeArtifactDetail<ExperimentRoadmapData>(detail);
+    setRoadmap(nextRoadmap);
+    setDraftRoadmap(null);
+    setIsEditing(false);
+    localStorage.setItem(storageKey, detail.id);
+  };
+
+  const startEditing = () => {
+    if (!roadmap) return;
+    setDraftRoadmap(structuredClone(roadmap));
+    setIsEditing(true);
+  };
+
+  const saveRevision = async () => {
+    if (!roadmap?.id || !draftRoadmap) return;
+    if (!draftRoadmap.objective.trim() || draftRoadmap.steps.some((step) => !step.task.trim() || !step.details.trim())) {
+      addNotification({ type: 'warning', message: '研究目标、步骤名称和步骤说明不能为空', duration: 3000 });
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const response = await artifactAPI.revise(
+        roadmap.id,
+        {
+          objective: draftRoadmap.objective.trim(),
+          steps: renumberSteps(draftRoadmap.steps),
+          baselines: draftRoadmap.baselines,
+          datasets: draftRoadmap.datasets,
+          tools: draftRoadmap.tools || [],
+          generation_mode: draftRoadmap.generation_mode,
+        },
+        undefined,
+        '人工编辑实验路线',
+      );
+      handleArtifactChanged(response.data);
+      addNotification({ type: 'success', message: '实验路线已保存为新草稿版本', duration: 3000 });
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        message: getApiErrorMessage(error, '实验路线保存失败'),
+        duration: 5000,
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const updateDraftSteps = (steps: ExperimentStep[]) => {
+    if (!draftRoadmap) return;
+    setDraftRoadmap({ ...draftRoadmap, steps: renumberSteps(steps) });
+  };
+
   const getStatusIcon = (status?: string) => {
     switch (status) {
       case 'completed':
@@ -171,9 +234,33 @@ function ExperimentRoadmap() {
 
       <AgentKnowledgePanel category="project-planning" />
 
+      {roadmap && (
+        <ArtifactReviewToolbar
+          artifact={roadmap}
+          isEditing={isEditing}
+          isSaving={isSaving}
+          onEdit={startEditing}
+          onSave={() => void saveRevision()}
+          onCancel={() => {
+            setDraftRoadmap(null);
+            setIsEditing(false);
+          }}
+          onArtifactChanged={handleArtifactChanged}
+        />
+      )}
+
       {roadmap && <div className="sci-card-glow">
         <h2 className="text-lg font-semibold mb-2">当前研究目标</h2>
-        <p className="text-sci-muted">{roadmap.objective}</p>
+        {isEditing && draftRoadmap ? (
+          <textarea
+            className="sci-input w-full resize-none"
+            rows={2}
+            value={draftRoadmap.objective}
+            onChange={(event) => setDraftRoadmap({ ...draftRoadmap, objective: event.target.value })}
+          />
+        ) : (
+          <p className="text-sci-muted">{roadmap.objective}</p>
+        )}
       </div>}
 
       {roadmap && <div className="grid lg:grid-cols-3 gap-6">
@@ -181,7 +268,7 @@ function ExperimentRoadmap() {
         <div className="lg:col-span-2 space-y-4">
           <h2 className="sci-section-title">实验步骤</h2>
           <div className="space-y-3">
-            {roadmap.steps.map((step, index) => (
+            {(isEditing && draftRoadmap ? draftRoadmap.steps : roadmap.steps).map((step, index, steps) => (
               <div
                 key={step.step}
                 className={`sci-card border-l-4 ${getStatusClass(step.status)}`}
@@ -194,20 +281,91 @@ function ExperimentRoadmap() {
                     )}
                   </div>
                   <div className="flex-1">
-                    <div className="flex items-center justify-between mb-1">
-                      <h3 className="font-semibold">
-                        Step {step.step}: {step.task}
-                      </h3>
-                      <span className="text-xs text-sci-muted flex items-center gap-1">
-                        <Clock size={12} />
-                        {step.estimated_days} 天
-                      </span>
-                    </div>
-                    <p className="text-sm text-sci-muted">{step.details}</p>
+                    {isEditing && draftRoadmap ? (
+                      <div className="space-y-2">
+                        <div className="grid md:grid-cols-[1fr_110px_140px_auto] gap-2">
+                          <input
+                            className="sci-input"
+                            value={step.task}
+                            onChange={(event) => updateDraftSteps(steps.map((item, stepIndex) => stepIndex === index ? { ...item, task: event.target.value } : item))}
+                            aria-label={`步骤 ${step.step} 名称`}
+                          />
+                          <input
+                            className="sci-input"
+                            type="number"
+                            min={1}
+                            max={90}
+                            value={step.estimated_days}
+                            onChange={(event) => updateDraftSteps(steps.map((item, stepIndex) => stepIndex === index ? { ...item, estimated_days: Math.max(1, Number(event.target.value) || 1) } : item))}
+                            aria-label={`步骤 ${step.step} 天数`}
+                          />
+                          <select
+                            className="sci-input"
+                            value={step.status || 'pending'}
+                            onChange={(event) => updateDraftSteps(steps.map((item, stepIndex) => stepIndex === index ? { ...item, status: event.target.value as ExperimentStep['status'] } : item))}
+                            aria-label={`步骤 ${step.step} 状态`}
+                          >
+                            <option value="pending">待开始</option>
+                            <option value="in_progress">进行中</option>
+                            <option value="completed">已完成</option>
+                          </select>
+                          <div className="flex">
+                            <button type="button" disabled={index === 0} onClick={() => updateDraftSteps([...steps.slice(0, index - 1), step, steps[index - 1], ...steps.slice(index + 1)])} className="p-2 text-sci-muted hover:text-sci-accent" title="上移">
+                              <ArrowUp size={15} />
+                            </button>
+                            <button type="button" disabled={index === steps.length - 1} onClick={() => updateDraftSteps([...steps.slice(0, index), steps[index + 1], step, ...steps.slice(index + 2)])} className="p-2 text-sci-muted hover:text-sci-accent" title="下移">
+                              <ArrowDown size={15} />
+                            </button>
+                            <button type="button" onClick={() => updateDraftSteps(steps.filter((_, stepIndex) => stepIndex !== index))} className="p-2 text-sci-muted hover:text-sci-danger" title="删除步骤">
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        </div>
+                        <textarea
+                          className="sci-input w-full resize-none text-sm"
+                          rows={2}
+                          value={step.details}
+                          onChange={(event) => updateDraftSteps(steps.map((item, stepIndex) => stepIndex === index ? { ...item, details: event.target.value } : item))}
+                          aria-label={`步骤 ${step.step} 说明`}
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between mb-1">
+                          <h3 className="font-semibold">
+                            Step {step.step}: {step.task}
+                          </h3>
+                          <span className="text-xs text-sci-muted flex items-center gap-1">
+                            <Clock size={12} />
+                            {step.estimated_days} 天
+                          </span>
+                        </div>
+                        <p className="text-sm text-sci-muted">{step.details}</p>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
             ))}
+            {isEditing && draftRoadmap && (
+              <button
+                type="button"
+                onClick={() => updateDraftSteps([
+                  ...draftRoadmap.steps,
+                  {
+                    step: draftRoadmap.steps.length + 1,
+                    task: '新的实验步骤',
+                    details: '填写具体工作与验收标准',
+                    estimated_days: 1,
+                    status: 'pending',
+                  },
+                ])}
+                className="sci-btn-secondary"
+              >
+                <Plus size={15} />
+                添加步骤
+              </button>
+            )}
           </div>
         </div>
 
@@ -297,6 +455,8 @@ function ExperimentRoadmap() {
               if (suggestedRepo) params.set('repoUrl', suggestedRepo);
               navigate(`/code/reproduce${params.size ? `?${params.toString()}` : ''}`);
             }}
+            disabled={roadmap.review_status !== 'confirmed' || isEditing}
+            title={roadmap.review_status === 'confirmed' ? undefined : '请先确认当前实验路线'}
             className="sci-btn-primary"
           >
             <Code2 size={16} />

@@ -162,16 +162,20 @@ class FrontendBackendContractTests(unittest.TestCase):
                 "reply", "message", "citations", "knowledge_used", "agent"
             },
             ("/research/decompose", "post", "200"): {
-                "id", "core_question", "sub_questions"
+                "id", "core_question", "sub_questions", "review_status",
+                "version_group_id", "version"
             },
             ("/experiments/generate-roadmap", "post", "200"): {
-                "id", "objective", "steps", "baselines", "datasets"
+                "id", "objective", "steps", "baselines", "datasets",
+                "review_status", "version_group_id", "version"
             },
             ("/code/analyze-repo", "post", "200"): {
-                "id", "repo_name", "repo_url", "file_tree", "dependencies", "steps"
+                "id", "repo_name", "repo_url", "file_tree", "dependencies", "steps",
+                "review_status", "version_group_id", "version"
             },
             ("/results/analyze", "post", "200"): {
-                "id", "charts", "stats", "interpretation", "suggestions"
+                "id", "charts", "stats", "interpretation", "suggestions",
+                "review_status", "version_group_id", "version"
             },
         }
         for (path, method, status), required in expected_required.items():
@@ -179,6 +183,47 @@ class FrontendBackendContractTests(unittest.TestCase):
                 schema = self.response_schema(path, method, status)
                 self.assertTrue(required.issubset(set(schema.get("required", []))))
                 self.assertTrue(required.issubset(set(schema.get("properties", {}))))
+
+    def test_artifact_version_workflow_is_published(self):
+        expected_operations = {
+            ("/artifacts/{artifact_id}", "patch"),
+            ("/artifacts/{artifact_id}/versions", "get"),
+            ("/artifacts/{artifact_id}/confirm", "post"),
+            ("/artifacts/{artifact_id}/deprecate", "post"),
+            ("/artifacts/{artifact_id}/restore", "post"),
+        }
+        for path, method in expected_operations:
+            with self.subTest(path=path, method=method):
+                operation = self.operation(path, method)
+                self.assertIn("200", operation["responses"])
+
+        revision = self.request_schema("/artifacts/{artifact_id}", "patch")
+        self.assertIn("content", revision.get("required", []))
+        history = self.response_schema("/artifacts/{artifact_id}/versions")
+        self.assertTrue(
+            {"version_group_id", "latest_version", "items"}.issubset(
+                set(history.get("required", []))
+            )
+        )
+
+    def test_project_memory_workflow_is_published(self):
+        expected_operations = {
+            ("/projects/{project_id}/memories", "get"),
+            ("/projects/{project_id}/memories", "post"),
+            ("/projects/{project_id}/memories/{memory_id}", "patch"),
+        }
+        for path, method in expected_operations:
+            with self.subTest(path=path, method=method):
+                self.assertIn("200", self.operation(path, method)["responses"])
+
+        create_schema = self.request_schema("/projects/{project_id}/memories")
+        self.assertTrue(
+            {"title", "content"}.issubset(set(create_schema.get("required", [])))
+        )
+        list_schema = self.response_schema("/projects/{project_id}/memories")
+        self.assertTrue(
+            {"items", "total"}.issubset(set(list_schema.get("required", [])))
+        )
 
     def test_protected_frontend_routes_publish_authorization_header(self):
         public_paths = {

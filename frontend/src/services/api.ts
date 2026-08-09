@@ -1,6 +1,8 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { useAuthStore } from '@/store/authStore';
 import type {
+  ArtifactDetail,
+  ArtifactVersionList,
   AgentKnowledgeAnswerResponse,
   AgentKnowledgeAskRequest,
   DashboardChatResponse,
@@ -19,6 +21,9 @@ import type {
   ResearchProject,
   ResearchProjectDetail,
   ResearchProjectStage,
+  ProjectMemory,
+  ProjectMemoryList,
+  ProjectMemoryType,
   ResearchJob,
   UnassignedProjectAssets,
 } from '@/types';
@@ -158,6 +163,36 @@ export const researchJobAPI = {
     apiClient.get<{ items: ResearchJob[] }>('/jobs', { params }),
 
   retry: (jobId: string) => apiClient.post<ResearchJob>(`/jobs/${jobId}/retry`),
+};
+
+// ---- Versioned research artifacts ----
+export const artifactAPI = {
+  getVersions: (artifactId: string) =>
+    apiClient.get<ArtifactVersionList>(`/artifacts/${artifactId}/versions`),
+
+  revise: <TContent extends Record<string, unknown>>(
+    artifactId: string,
+    content: TContent,
+    title?: string,
+    revisionNote?: string,
+  ) => apiClient.patch<ArtifactDetail<TContent>>(`/artifacts/${artifactId}`, {
+    content,
+    title,
+    revision_note: revisionNote,
+  }),
+
+  confirm: <TContent extends Record<string, unknown>>(artifactId: string) =>
+    apiClient.post<ArtifactDetail<TContent>>(`/artifacts/${artifactId}/confirm`),
+
+  deprecate: <TContent extends Record<string, unknown>>(artifactId: string) =>
+    apiClient.post<ArtifactDetail<TContent>>(`/artifacts/${artifactId}/deprecate`),
+
+  restore: <TContent extends Record<string, unknown>>(
+    artifactId: string,
+    revisionNote?: string,
+  ) => apiClient.post<ArtifactDetail<TContent>>(`/artifacts/${artifactId}/restore`, {
+    revision_note: revisionNote,
+  }),
 };
 
 // ---- Experiment ----
@@ -320,6 +355,22 @@ export const projectAPI = {
     assetId: string,
     projectId: string | null,
   ) => apiClient.patch(`/project-assets/${assetType}/${assetId}`, { project_id: projectId }),
+
+  getMemories: (projectId: string, includeArchived = true) =>
+    apiClient.get<ProjectMemoryList>(`/projects/${projectId}/memories`, {
+      params: { include_archived: includeArchived },
+    }),
+
+  createMemory: (
+    projectId: string,
+    data: { memory_type: ProjectMemoryType; title: string; content: string },
+  ) => apiClient.post<ProjectMemory>(`/projects/${projectId}/memories`, data),
+
+  updateMemory: (
+    projectId: string,
+    memoryId: string,
+    data: Partial<Pick<ProjectMemory, 'memory_type' | 'title' | 'content' | 'status'>>,
+  ) => apiClient.patch<ProjectMemory>(`/projects/${projectId}/memories/${memoryId}`, data),
 };
 
 export const resourceAPI = {

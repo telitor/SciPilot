@@ -157,6 +157,16 @@ ProjectStage = Literal[
     "analysis",
     "completed",
 ]
+ArtifactReviewStatus = Literal["draft", "confirmed", "deprecated"]
+ProjectMemoryType = Literal[
+    "fact",
+    "decision",
+    "constraint",
+    "preference",
+    "lesson",
+    "artifact-summary",
+]
+ProjectMemoryStatus = Literal["active", "archived"]
 
 
 class CreateResearchProjectRequest(BaseModel):
@@ -200,6 +210,64 @@ class ProjectAssignmentRequest(BaseModel):
     project_id: Optional[UUID] = None
 
 
+class CreateProjectMemoryRequest(BaseModel):
+    memory_type: ProjectMemoryType = "fact"
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=8000)
+
+    @field_validator("title", "content")
+    @classmethod
+    def memory_text_must_not_be_blank(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("记忆内容不能为空")
+        return cleaned
+
+
+class UpdateProjectMemoryRequest(BaseModel):
+    memory_type: Optional[ProjectMemoryType] = None
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    content: Optional[str] = Field(default=None, min_length=1, max_length=8000)
+    status: Optional[ProjectMemoryStatus] = None
+
+    @field_validator("title", "content")
+    @classmethod
+    def updated_memory_text_must_not_be_blank(
+        cls, value: Optional[str]
+    ) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("记忆内容不能为空")
+        return cleaned
+
+    @model_validator(mode="after")
+    def require_memory_update(self):
+        if not self.model_fields_set:
+            raise ValueError("至少提供一个需要更新的记忆字段")
+        return self
+
+
+class ProjectMemoryResponse(BaseModel):
+    id: str
+    project_id: str
+    memory_type: ProjectMemoryType
+    title: str
+    content: str
+    source_type: Literal["manual", "artifact"]
+    source_id: Optional[str] = None
+    source_version: Optional[int] = Field(default=None, ge=1)
+    status: ProjectMemoryStatus
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ProjectMemoryListResponse(BaseModel):
+    items: list[ProjectMemoryResponse]
+    total: int = Field(ge=0)
+
+
 # Stable response contracts for the P0 research workflow. These models keep
 # FastAPI's OpenAPI schema useful to the frontend and CI without constraining
 # provider-specific metadata stored alongside the core fields.
@@ -239,6 +307,67 @@ class ResearchJobListResponse(BaseModel):
     items: list[ResearchJobResponse]
 
 
+class ArtifactRevisionRequest(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    content: dict[str, Any]
+    revision_note: Optional[str] = Field(default=None, max_length=1000)
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("标题不能为空")
+        return cleaned
+
+    @field_validator("content")
+    @classmethod
+    def content_must_be_bounded(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if not value:
+            raise ValueError("产物内容不能为空")
+        if len(json.dumps(value, ensure_ascii=False)) > 250_000:
+            raise ValueError("产物内容不能超过 250000 个字符")
+        return value
+
+
+class ArtifactRestoreRequest(BaseModel):
+    revision_note: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ArtifactDetailResponse(BaseModel):
+    id: str
+    project_id: Optional[str] = None
+    artifact_type: str
+    title: str
+    content: dict[str, Any]
+    review_status: ArtifactReviewStatus
+    version_group_id: str
+    version: int = Field(ge=1)
+    parent_version_id: Optional[str] = None
+    confirmed_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ArtifactVersionSummaryResponse(BaseModel):
+    id: str
+    title: str
+    review_status: ArtifactReviewStatus
+    version: int = Field(ge=1)
+    parent_version_id: Optional[str] = None
+    confirmed_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ArtifactVersionListResponse(BaseModel):
+    version_group_id: str
+    latest_version: int = Field(ge=1)
+    items: list[ArtifactVersionSummaryResponse]
+
+
 class ChatAgentResponse(BaseModel):
     id: str
     name: str
@@ -268,6 +397,13 @@ class ResearchNodeResponse(BaseModel):
 class ResearchTreeResponse(BaseModel):
     id: str
     project_id: Optional[str] = None
+    review_status: ArtifactReviewStatus
+    version_group_id: str
+    version: int = Field(ge=1)
+    parent_version_id: Optional[str] = None
+    confirmed_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     core_question: str
     sub_questions: list[ResearchNodeResponse]
     generation_mode: Optional[str] = None
@@ -300,6 +436,13 @@ class DatasetResponse(BaseModel):
 class ExperimentRoadmapResponse(BaseModel):
     id: str
     project_id: Optional[str] = None
+    review_status: ArtifactReviewStatus
+    version_group_id: str
+    version: int = Field(ge=1)
+    parent_version_id: Optional[str] = None
+    confirmed_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     objective: str
     steps: list[ExperimentStepResponse]
     baselines: list[BaselineResponse]
@@ -332,6 +475,13 @@ class ReproductionStepResponse(BaseModel):
 class CodeReproductionResponse(BaseModel):
     id: str
     project_id: Optional[str] = None
+    review_status: ArtifactReviewStatus
+    version_group_id: str
+    version: int = Field(ge=1)
+    parent_version_id: Optional[str] = None
+    confirmed_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     repo_name: str
     repo_url: str
     language: str
@@ -364,6 +514,13 @@ class StatsSummaryResponse(BaseModel):
 class ResultAnalysisResponse(BaseModel):
     id: str
     project_id: Optional[str] = None
+    review_status: ArtifactReviewStatus
+    version_group_id: str
+    version: int = Field(ge=1)
+    parent_version_id: Optional[str] = None
+    confirmed_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     charts: list[ChartResponse]
     stats: list[StatsSummaryResponse]
     interpretation: str

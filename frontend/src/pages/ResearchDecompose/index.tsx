@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, ChevronDown, ChevronRight, BookOpen, Database, ArrowRight, Loader2 } from 'lucide-react';
+import { Search, ChevronDown, ChevronRight, BookOpen, Database, ArrowRight, Loader2, Plus, Trash2, Combine } from 'lucide-react';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
+import ArtifactReviewToolbar, { mergeArtifactDetail } from '@/components/ArtifactReviewToolbar';
 import ProjectContextBar from '@/components/ProjectContextBar';
 import { useDurableResearchJob } from '@/hooks/useDurableResearchJob';
-import { researchAPI } from '@/services/api';
+import { artifactAPI, researchAPI } from '@/services/api';
 import { getApiErrorMessage } from '@/services/errors';
 import { useAuthStore } from '@/store/authStore';
 import { useSelectedProjectId } from '@/store/projectStore';
@@ -107,6 +108,117 @@ function TreeNode({
   );
 }
 
+function newResearchNode(): ResearchNode {
+  return {
+    id: `rq-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    question: '新的研究子问题',
+    feasibility: 'medium',
+    datasets: [],
+    papers: [],
+    children: [],
+  };
+}
+
+function mergeNodes(nodes: ResearchNode[], index: number): ResearchNode[] {
+  if (index <= 0 || index >= nodes.length) return nodes;
+  const previous = nodes[index - 1];
+  const current = nodes[index];
+  const merged: ResearchNode = {
+    ...previous,
+    question: `${previous.question}；${current.question}`,
+    datasets: [...new Set([...previous.datasets, ...current.datasets])],
+    papers: [...new Set([...previous.papers, ...current.papers])],
+    children: [...(previous.children || []), ...(current.children || [])],
+  };
+  return [...nodes.slice(0, index - 1), merged, ...nodes.slice(index + 1)];
+}
+
+function EditableTreeNode({
+  node,
+  onChange,
+  onDelete,
+  onMerge,
+}: {
+  node: ResearchNode;
+  onChange: (node: ResearchNode) => void;
+  onDelete: () => void;
+  onMerge?: () => void;
+}) {
+  const children = node.children || [];
+  const updateChildren = (nextChildren: ResearchNode[]) => onChange({ ...node, children: nextChildren });
+
+  return (
+    <div className="border-l-2 border-sci-border pl-3 space-y-3">
+      <div className="grid md:grid-cols-[1fr_140px_auto] gap-2 items-start">
+        <input
+          className="sci-input"
+          value={node.question}
+          onChange={(event) => onChange({ ...node, question: event.target.value })}
+          aria-label="研究子问题"
+        />
+        <select
+          className="sci-input"
+          value={node.feasibility}
+          onChange={(event) => onChange({
+            ...node,
+            feasibility: event.target.value as ResearchNode['feasibility'],
+          })}
+          aria-label="可行性"
+        >
+          <option value="high">可行性高</option>
+          <option value="medium">可行性中</option>
+          <option value="low">可行性低</option>
+        </select>
+        <div className="flex gap-1">
+          {onMerge && (
+            <button type="button" onClick={onMerge} className="p-2 text-sci-muted hover:text-sci-accent" title="与上一节点合并">
+              <Combine size={16} />
+            </button>
+          )}
+          <button type="button" onClick={onDelete} className="p-2 text-sci-muted hover:text-sci-danger" title="删除节点">
+            <Trash2 size={16} />
+          </button>
+        </div>
+      </div>
+      <div className="grid md:grid-cols-2 gap-2">
+        <input
+          className="sci-input text-sm"
+          value={node.datasets.join(', ')}
+          onChange={(event) => onChange({
+            ...node,
+            datasets: event.target.value.split(',').map((item) => item.trim()).filter(Boolean),
+          })}
+          placeholder="相关数据集，用逗号分隔"
+        />
+        <input
+          className="sci-input text-sm"
+          value={node.papers.join(', ')}
+          onChange={(event) => onChange({
+            ...node,
+            papers: event.target.value.split(',').map((item) => item.trim()).filter(Boolean),
+          })}
+          placeholder="相关论文，用逗号分隔"
+        />
+      </div>
+      <div className="space-y-3 pl-3">
+        {children.map((child, index) => (
+          <EditableTreeNode
+            key={child.id}
+            node={child}
+            onChange={(nextChild) => updateChildren(children.map((item, childIndex) => childIndex === index ? nextChild : item))}
+            onDelete={() => updateChildren(children.filter((_, childIndex) => childIndex !== index))}
+            onMerge={index > 0 ? () => updateChildren(mergeNodes(children, index)) : undefined}
+          />
+        ))}
+        <button type="button" onClick={() => updateChildren([...children, newResearchNode()])} className="sci-btn-secondary">
+          <Plus size={14} />
+          添加子节点
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ResearchDecompose() {
   const selectedProjectId = useSelectedProjectId();
   const navigate = useNavigate();
@@ -120,10 +232,15 @@ function ResearchDecompose() {
   const [direction, setDirection] = useState(incomingDirection);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [tree, setTree] = useState<import('@/types').ResearchTree | null>(null);
+  const [draftTree, setDraftTree] = useState<ResearchTree | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const { addNotification } = useUIStore();
 
   const handleJobSucceeded = useCallback((result: ResearchTree) => {
     setTree(result);
+    setDraftTree(null);
+    setIsEditing(false);
     if (result.id) {
       localStorage.setItem(storageKey, result.id);
       if (linkedPaperId) localStorage.setItem(sourceStorageKey, linkedPaperId);
@@ -197,6 +314,51 @@ function ResearchDecompose() {
     }
   };
 
+  const handleArtifactChanged = (detail: import('@/types').ArtifactDetail) => {
+    const nextTree = mergeArtifactDetail<ResearchTree>(detail);
+    setTree(nextTree);
+    setDraftTree(null);
+    setIsEditing(false);
+    localStorage.setItem(storageKey, detail.id);
+  };
+
+  const startEditing = () => {
+    if (!tree) return;
+    setDraftTree(structuredClone(tree));
+    setIsEditing(true);
+  };
+
+  const saveRevision = async () => {
+    if (!tree?.id || !draftTree) return;
+    if (!draftTree.core_question.trim()) {
+      addNotification({ type: 'warning', message: '核心问题不能为空', duration: 3000 });
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const response = await artifactAPI.revise(
+        tree.id,
+        {
+          core_question: draftTree.core_question.trim(),
+          sub_questions: draftTree.sub_questions,
+          generation_mode: draftTree.generation_mode,
+        },
+        undefined,
+        '人工编辑问题树',
+      );
+      handleArtifactChanged(response.data);
+      addNotification({ type: 'success', message: '问题树已保存为新草稿版本', duration: 3000 });
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        message: getApiErrorMessage(error, '问题树保存失败'),
+        duration: 5000,
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-6 pb-20 md:pb-0">
       <h1 className="text-2xl font-bold">研究问题拆解</h1>
@@ -251,19 +413,82 @@ function ResearchDecompose() {
       {/* Result */}
       {tree && (
         <div className="space-y-4">
-          <div className="sci-card-glow">
-            <h2 className="text-lg font-semibold mb-2">核心问题</h2>
-            <p className="text-sci-accent">{tree.core_question}</p>
-          </div>
+          <ArtifactReviewToolbar
+            artifact={tree}
+            isEditing={isEditing}
+            isSaving={isSaving}
+            onEdit={startEditing}
+            onSave={() => void saveRevision()}
+            onCancel={() => {
+              setDraftTree(null);
+              setIsEditing(false);
+            }}
+            onArtifactChanged={handleArtifactChanged}
+          />
 
-          <div className="sci-card">
-            <h3 className="sci-section-title mb-4">子问题树</h3>
-            <div className="space-y-1">
-              {tree.sub_questions.map((node) => (
-                <TreeNode key={node.id} node={node} />
-              ))}
+          {isEditing && draftTree ? (
+            <div className="sci-card space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">核心问题</label>
+                <input
+                  className="sci-input w-full"
+                  value={draftTree.core_question}
+                  onChange={(event) => setDraftTree({
+                    ...draftTree,
+                    core_question: event.target.value,
+                  })}
+                />
+              </div>
+              <div className="space-y-4">
+                <h3 className="sci-section-title">编辑子问题树</h3>
+                {draftTree.sub_questions.map((node, index) => (
+                  <EditableTreeNode
+                    key={node.id}
+                    node={node}
+                    onChange={(nextNode) => setDraftTree({
+                      ...draftTree,
+                      sub_questions: draftTree.sub_questions.map((item, nodeIndex) => nodeIndex === index ? nextNode : item),
+                    })}
+                    onDelete={() => setDraftTree({
+                      ...draftTree,
+                      sub_questions: draftTree.sub_questions.filter((_, nodeIndex) => nodeIndex !== index),
+                    })}
+                    onMerge={index > 0 ? () => setDraftTree({
+                      ...draftTree,
+                      sub_questions: mergeNodes(draftTree.sub_questions, index),
+                    }) : undefined}
+                  />
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setDraftTree({
+                    ...draftTree,
+                    sub_questions: [...draftTree.sub_questions, newResearchNode()],
+                  })}
+                  className="sci-btn-secondary"
+                >
+                  <Plus size={15} />
+                  添加一级问题
+                </button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <>
+              <div className="sci-card-glow">
+                <h2 className="text-lg font-semibold mb-2">核心问题</h2>
+                <p className="text-sci-accent">{tree.core_question}</p>
+              </div>
+
+              <div className="sci-card">
+                <h3 className="sci-section-title mb-4">子问题树</h3>
+                <div className="space-y-1">
+                  {tree.sub_questions.map((node) => (
+                    <TreeNode key={node.id} node={node} />
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Action Buttons */}
           <div className="flex flex-wrap gap-3">
@@ -277,6 +502,8 @@ function ResearchDecompose() {
                 if (tree.id) params.set('questionId', tree.id);
                 navigate(`/experiment/roadmap?${params.toString()}`);
               }}
+              disabled={tree.review_status !== 'confirmed' || isEditing}
+              title={tree.review_status === 'confirmed' ? undefined : '请先确认当前问题树'}
               className="sci-btn-primary"
             >
               生成实验方案
