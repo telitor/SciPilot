@@ -6,9 +6,13 @@ from openai import OpenAI
 
 from services.finetuned_model_service import (
     call_finetuned_model,
+    call_finetuned_model_with_metadata,
     is_finetuned_model_configured,
 )
-from services.xunfei_agent_service import call_xunfei_agent_by_category
+from services.xunfei_agent_service import (
+    call_xunfei_agent_by_category,
+    call_xunfei_agent_by_category_with_metadata,
+)
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
@@ -99,3 +103,44 @@ def generate_reply(
         system_prompt=system_prompt,
         user_message=user_message,
     )
+
+
+def generate_reply_with_metadata(
+    system_prompt: str,
+    user_message: str,
+    agent_category: str = "",
+    user_id: str = "",
+    max_tokens: int | None = None,
+) -> dict[str, object]:
+    """Generate a reply plus privacy-safe usage metadata."""
+
+    professional_categories = {
+        "paper-reading",
+        "problem-decomposition",
+        "project-planning",
+        "result-interpretation",
+        "code-reproduction",
+    }
+    if agent_category in professional_categories:
+        agent_message = user_message
+        if system_prompt.strip():
+            agent_message = (
+                f"【智能体职责】\n{system_prompt.strip()}\n\n"
+                f"【用户请求】\n{user_message.strip()}"
+            )
+        return call_xunfei_agent_by_category_with_metadata(
+            user_id=user_id,
+            user_message=agent_message,
+            agent_category=agent_category,
+            max_tokens=max_tokens,
+        )
+
+    if is_finetuned_model_configured():
+        return call_finetuned_model_with_metadata(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            max_tokens=max_tokens,
+        )
+
+    reply = call_default_llm(system_prompt, user_message)
+    return {"text": reply, "usage": {}}

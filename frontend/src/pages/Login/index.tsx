@@ -14,6 +14,7 @@ function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -27,7 +28,7 @@ function Login() {
     try {
       const response = await authAPI.login(email, password);
       const { user, token } = response.data;
-      login(user, token);
+      login(user, token, rememberMe);
       addNotification({ type: 'success', message: '登录成功', duration: 3000 });
       navigate('/dashboard');
     } catch (error) {
@@ -102,17 +103,17 @@ function Login() {
 
             <div className="flex items-center justify-between text-sm">
               <label className="flex items-center gap-2 text-sci-muted cursor-pointer">
-                <input type="checkbox" className="rounded bg-sci-bg3 border-sci-border" />
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(event) => setRememberMe(event.target.checked)}
+                  className="rounded bg-sci-bg3 border-sci-border"
+                />
                 <span>记住我</span>
               </label>
-              <button
-                type="button"
-                disabled
-                title="密码找回功能暂未开放"
-                className="cursor-not-allowed text-sci-muted opacity-60"
-              >
-                忘记密码（暂未开放）
-              </button>
+              <Link to="/forgot-password" className="text-sci-accent hover:underline">
+                忘记密码
+              </Link>
             </div>
 
             <button

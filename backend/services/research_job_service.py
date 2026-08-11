@@ -176,6 +176,36 @@ def retry_owned_research_job(job_id: str, user_id: str) -> dict[str, Any]:
     return job
 
 
+def cancel_owned_research_job(job_id: str, user_id: str) -> dict[str, Any]:
+    current = get_owned_research_job(job_id, user_id)
+    if current.get("status") == "cancelled":
+        return current
+    if current.get("status") not in {"pending", "running"}:
+        raise HTTPException(status_code=409, detail="只有等待中或执行中的任务可以取消")
+    now = datetime.now(timezone.utc).isoformat()
+    result = (
+        _database()
+        .table("research_jobs")
+        .update(
+            {
+                "status": "cancelled",
+                "error_message": None,
+                "lease_owner": None,
+                "lease_expires_at": None,
+                "completed_at": now,
+            }
+        )
+        .eq("id", job_id)
+        .eq("user_id", user_id)
+        .in_("status", ["pending", "running"])
+        .execute()
+    )
+    job = _first(result)
+    if not job:
+        raise HTTPException(status_code=409, detail="任务状态已变化，请刷新后重试")
+    return job
+
+
 def claim_research_job(worker_id: str, lease_seconds: int) -> dict[str, Any] | None:
     result = _database().rpc(
         "claim_research_job",

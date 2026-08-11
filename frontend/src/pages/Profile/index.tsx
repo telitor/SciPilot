@@ -3,7 +3,9 @@ import { Mail, Calendar, FileText, MessageSquare, Star, Clock } from 'lucide-rea
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { authAPI } from '@/services/api';
+import { getApiErrorMessage } from '@/services/errors';
 import AiQualityPanel from '@/components/AiQualityPanel';
+import AdminAccountPanel from '@/components/AdminAccountPanel';
 
 interface ProfileStats {
   paper_count: number;
@@ -24,10 +26,17 @@ interface Activity {
 function Profile() {
   const { user, updateUser } = useAuthStore();
   const { addNotification } = useUIStore();
-  const [activeTab, setActiveTab] = useState<'overview' | 'history' | 'settings' | 'quality'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'history' | 'settings' | 'accounts' | 'quality'>('overview');
   const [profileStats, setProfileStats] = useState<ProfileStats | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [username, setUsername] = useState(user?.username ?? '');
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    user?.preferences?.notifications_enabled !== false,
+  );
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(
+    user?.preferences?.auto_save_enabled !== false,
+  );
+  const [saving, setSaving] = useState(false);
 
   const stats = [
     { label: '上传论文', value: profileStats?.paper_count ?? 0, icon: FileText },
@@ -42,16 +51,42 @@ function Profile() {
         setProfileStats(statsResponse.data);
         setActivities(activitiesResponse.data.items ?? []);
       })
-      .catch(() => undefined);
-  }, []);
+      .catch((error) => {
+        addNotification({
+          type: 'error',
+          message: getApiErrorMessage(error, '个人数据加载失败，请稍后重试。'),
+          duration: 5000,
+        });
+      });
+  }, [addNotification]);
+
+  useEffect(() => {
+    setUsername(user?.username ?? '');
+    setNotificationsEnabled(user?.preferences?.notifications_enabled !== false);
+    setAutoSaveEnabled(user?.preferences?.auto_save_enabled !== false);
+  }, [user]);
 
   const handleSaveProfile = async () => {
+    setSaving(true);
     try {
-      const response = await authAPI.updateMe({ username });
+      const response = await authAPI.updateMe({
+        username,
+        preferences: {
+          ...(user?.preferences ?? {}),
+          notifications_enabled: notificationsEnabled,
+          auto_save_enabled: autoSaveEnabled,
+        },
+      });
       updateUser(response.data);
-      addNotification({ type: 'success', message: '个人资料已保存', duration: 3000 });
-    } catch {
-      // The shared API interceptor already displays the server error.
+      addNotification({ type: 'success', message: '个人资料和偏好已保存', duration: 3000 });
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        message: getApiErrorMessage(error, '保存失败，请稍后重试。'),
+        duration: 5000,
+      });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -85,7 +120,10 @@ function Profile() {
           { key: 'overview', label: '概览' },
           { key: 'history', label: '历史记录' },
           { key: 'settings', label: '设置' },
-          ...(user?.role === 'admin' ? [{ key: 'quality', label: 'AI 质量' }] : []),
+          ...(user?.role === 'admin' ? [
+            { key: 'accounts', label: '账号治理' },
+            { key: 'quality', label: 'AI 质量' },
+          ] : []),
         ].map((tab) => (
           <button
             key={tab.key}
@@ -170,9 +208,9 @@ function Profile() {
               </div>
               <div>
                 <label className="block text-sm text-sci-muted mb-2">邮箱</label>
-                <input type="email" defaultValue={user?.email} className="sci-input w-full max-w-md" />
+                <input type="email" value={user?.email ?? ''} readOnly className="sci-input w-full max-w-md opacity-70" />
+                <p className="mt-1 text-xs text-sci-muted">邮箱变更需要重新验证，当前版本暂不支持直接修改。</p>
               </div>
-              <button onClick={handleSaveProfile} className="sci-btn-primary">保存修改</button>
             </div>
           </div>
 
@@ -185,7 +223,12 @@ function Profile() {
                   <p className="text-sm text-sci-muted">接收实验完成、论文解析等通知</p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" defaultChecked className="sr-only peer" />
+                  <input
+                    type="checkbox"
+                    checked={notificationsEnabled}
+                    onChange={(event) => setNotificationsEnabled(event.target.checked)}
+                    className="sr-only peer"
+                  />
                   <div className="w-11 h-6 bg-sci-bg3 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sci-primary" />
                 </label>
               </div>
@@ -195,15 +238,24 @@ function Profile() {
                   <p className="text-sm text-sci-muted">自动保存对话和实验记录</p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" defaultChecked className="sr-only peer" />
+                  <input
+                    type="checkbox"
+                    checked={autoSaveEnabled}
+                    onChange={(event) => setAutoSaveEnabled(event.target.checked)}
+                    className="sr-only peer"
+                  />
                   <div className="w-11 h-6 bg-sci-bg3 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sci-primary" />
                 </label>
               </div>
+              <button onClick={handleSaveProfile} disabled={saving} className="sci-btn-primary">
+                {saving ? '正在保存…' : '保存资料与偏好'}
+              </button>
             </div>
           </div>
         </div>
       )}
 
+      {activeTab === 'accounts' && user?.role === 'admin' && <AdminAccountPanel />}
       {activeTab === 'quality' && user?.role === 'admin' && <AiQualityPanel />}
     </div>
   );

@@ -9,7 +9,7 @@ import re
 import statistics
 import uuid
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO, StringIO
 from pathlib import Path
 from time import perf_counter
@@ -47,6 +47,13 @@ from api.dependencies import (
 from api.schemas import (
     AdminFeedbackListResponse,
     AdminFeedbackResponse,
+    AdminRoleAuditListResponse,
+    AdminRoleChangeRequest,
+    AdminUserListResponse,
+    AdminUserResponse,
+    AiAlertListResponse,
+    AiAlertResponse,
+    AiMetricsResponse,
     AgentKnowledgeAskRequest,
     AgentWorkflowEnvelopeResponse,
     AgentWorkflowResponse,
@@ -59,16 +66,20 @@ from api.schemas import (
     DashboardChatResponse,
     DashboardChatRequest,
     CreateConversationRequest,
+    CreateExperimentRunRequest,
     CreateProjectMemoryRequest,
     CreateResearchProjectRequest,
     DiagnoseRequest,
     ExperimentRoadmapRequest,
     ExperimentRoadmapResponse,
+    ExperimentRunListResponse,
+    ExperimentRunResponse,
     EvaluationRunListResponse,
     EvaluationRunRequest,
     EvaluationRunResponse,
     EvaluationSuiteResponse,
     FeedbackReviewRequest,
+    ForgotPasswordRequest,
     KnowledgeQueryRequest,
     LegacyChatRequest,
     LoginRequest,
@@ -80,6 +91,7 @@ from api.schemas import (
     ProjectMemoryResponse,
     PaperUploadJobResponse,
     RegisterRequest,
+    ResetPasswordRequest,
     RepoAnalysisRequest,
     ResearchDecomposeRequest,
     ResearchJobListResponse,
@@ -88,16 +100,18 @@ from api.schemas import (
     ResultAnalysisResponse,
     UpdateResearchProjectRequest,
     UpdateProfileRequest,
+    UpdateExperimentRunRequest,
     UpdateProjectMemoryRequest,
 )
 from services.finetuned_model_service import (
-    call_finetuned_model,
+    call_finetuned_model_with_metadata,
     model_service_status,
 )
 from services.evaluation_service import evaluate_rag_retrieval_cases
-from services.llm_service import generate_reply
+from services.llm_service import generate_reply, generate_reply_with_metadata
 from services.research_job_service import (
     PermanentResearchJobError,
+    cancel_owned_research_job,
     create_or_reuse_research_job,
     create_research_job,
     get_owned_research_job,
@@ -164,8 +178,23 @@ def _record_ai_run(
     fallback_reason: str | None = None,
     retrieval_count: int = 0,
     model_latency_ms: int | None = None,
+    usage: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Persist bounded operational metadata without prompts or response bodies."""
+
+    safe_usage = usage if isinstance(usage, dict) else {}
+    input_tokens = max(0, int(safe_usage.get("input_tokens") or 0))
+    output_tokens = max(0, int(safe_usage.get("output_tokens") or 0))
+    usage_source = str(safe_usage.get("usage_source") or "unavailable")
+    if usage_source not in {"provider", "estimated", "unavailable"}:
+        usage_source = "unavailable"
+    raw_cost = safe_usage.get("estimated_cost_cny")
+    estimated_cost = None
+    try:
+        if raw_cost is not None:
+            estimated_cost = max(0.0, float(raw_cost))
+    except (TypeError, ValueError):
+        estimated_cost = None
 
     payload = {
         "user_id": user_id,
@@ -184,13 +213,129 @@ def _record_ai_run(
         "model_latency_ms": (
             max(0, int(model_latency_ms)) if model_latency_ms is not None else None
         ),
-        "token_usage": {},
+        "token_usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "source": usage_source,
+        },
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "usage_source": usage_source,
+        "estimated_cost_cny": estimated_cost,
     }
     try:
-        return _first(database().table("ai_runs").insert(payload).execute())
+        saved = _first(database().table("ai_runs").insert(payload).execute())
+        if saved:
+            _evaluate_ai_alerts(module=payload["module"])
+        return saved
     except Exception:
         logger.warning("AI run metadata could not be persisted")
         return None
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _percentile_95(values: list[int]) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, math.ceil(len(ordered) * 0.95) - 1)]
+
+
+def _evaluate_ai_alerts(*, module: str) -> None:
+    """Evaluate bounded 24-hour operational rules after a completed AI call."""
+
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        rows = (
+            database()
+            .table("ai_runs")
+            .select("status,latency_ms")
+            .eq("module", module)
+            .gte("created_at", cutoff)
+            .limit(1000)
+            .execute()
+            .data
+            or []
+        )
+        total = len(rows)
+        minimum = max(1, int(os.getenv("AI_ALERT_MIN_SAMPLE_SIZE", "5")))
+        if total < minimum:
+            return
+        failures = sum(1 for row in rows if row.get("status") == "failed")
+        degraded = sum(1 for row in rows if row.get("status") == "degraded")
+        p95 = _percentile_95([max(0, int(row.get("latency_ms") or 0)) for row in rows])
+        rules = [
+            (
+                "failure-rate",
+                failures / total,
+                _env_float("AI_ALERT_FAILURE_RATE", 0.30),
+                "AI 调用失败率偏高",
+            ),
+            (
+                "degraded-rate",
+                degraded / total,
+                _env_float("AI_ALERT_DEGRADED_RATE", 0.50),
+                "AI 降级响应比例偏高",
+            ),
+            (
+                "p95-latency",
+                float(p95),
+                _env_float("AI_ALERT_P95_LATENCY_MS", 120000),
+                "AI 响应延迟偏高",
+            ),
+            (
+                "daily-volume",
+                float(total),
+                _env_float("AI_ALERT_DAILY_VOLUME", 100),
+                "AI 日调用量达到阈值",
+            ),
+        ]
+        now = datetime.now(timezone.utc).isoformat()
+        for alert_type, value, threshold, title in rules:
+            if value < threshold:
+                continue
+            detail = (
+                f"模块 {module} 在最近 24 小时的 {alert_type} 指标为 "
+                f"{value:.4f}，阈值为 {threshold:.4f}。"
+            )
+            dedupe_key = f"{module}:{alert_type}:24h"
+            existing = _first(
+                database()
+                .table("ai_alerts")
+                .select("id,occurrence_count")
+                .eq("dedupe_key", dedupe_key)
+                .limit(1)
+                .execute()
+            )
+            alert_payload = {
+                "module": module,
+                "alert_type": alert_type,
+                "severity": "critical" if value >= threshold * 1.5 else "warning",
+                "status": "open",
+                "title": title,
+                "detail": detail,
+                "metric_value": value,
+                "threshold_value": threshold,
+                "dedupe_key": dedupe_key,
+                "last_seen_at": now,
+            }
+            if existing:
+                alert_payload["occurrence_count"] = int(
+                    existing.get("occurrence_count") or 0
+                ) + 1
+                database().table("ai_alerts").update(alert_payload).eq(
+                    "id", existing["id"]
+                ).execute()
+            else:
+                database().table("ai_alerts").insert(alert_payload).execute()
+    except Exception:
+        logger.warning("AI alert evaluation could not be completed")
 
 
 def _safe_filename(filename: str) -> str:
@@ -661,22 +806,91 @@ def _search_external_knowledge(
     message: str,
     *,
     top_n: int,
+    file_ids: list[str],
 ) -> list[dict[str, Any]]:
-    return _retrieve_external_knowledge(message, top_n=top_n)["citations"]
+    return _retrieve_external_knowledge(
+        message,
+        top_n=top_n,
+        file_ids=file_ids,
+    )["citations"]
 
 
 def _retrieve_external_knowledge(
     message: str,
     *,
     top_n: int,
+    file_ids: list[str],
 ) -> dict[str, Any]:
+    if not file_ids:
+        return {
+            "query": message.strip(),
+            "retrieval_queries": [],
+            "citations": [],
+            "candidate_count": 0,
+            "rerank_mode": "user-file-scope-empty",
+            "degraded": False,
+        }
     try:
-        return retrieve_xunfei_knowledge_base(message.strip(), top_n=top_n)
+        retrieval = retrieve_xunfei_knowledge_base(
+            message.strip(),
+            top_n=top_n,
+            file_ids=file_ids,
+        )
+        allowed = set(file_ids)
+        citations = retrieval.get("citations")
+        retrieval["citations"] = [
+            item
+            for item in citations
+            if isinstance(item, dict)
+            and str(item.get("document_id") or "") in allowed
+        ] if isinstance(citations, list) else []
+        return retrieval
     except (XunfeiKnowledgeBaseError, ValueError):
         raise _upstream_error("星火知识库") from None
     except Exception:
         # Never expose provider response bodies, request URLs, or credentials.
         raise _upstream_error("星火知识库") from None
+
+
+def _owned_knowledge_mappings(user_id: str) -> list[dict[str, Any]]:
+    """Return only ChatDoc files mapped to the authenticated user."""
+
+    try:
+        result = (
+            database()
+            .table("paper_knowledge_files")
+            .select(
+                "paper_id,provider_file_id,file_name,status,vectored_at,updated_at"
+            )
+            .eq("user_id", user_id)
+            .eq("provider", PAPER_KNOWLEDGE_PROVIDER)
+            .order("updated_at", desc=True)
+            .limit(100)
+            .execute()
+        )
+    except Exception:
+        logger.warning("Unable to load the authenticated user's knowledge files")
+        raise HTTPException(
+            status_code=503,
+            detail="暂时无法读取当前用户的知识库文件，请稍后重试",
+        ) from None
+    return result.data or []
+
+
+def _owned_vectored_file_ids(user_id: str) -> list[str]:
+    """Build a provider-safe file allowlist without exposing another user."""
+
+    file_ids: list[str] = []
+    for mapping in _owned_knowledge_mappings(user_id):
+        if mapping.get("status") != "vectored":
+            continue
+        file_id = str(mapping.get("provider_file_id") or "").strip()
+        if file_id and file_id not in file_ids:
+            file_ids.append(file_id)
+        # ChatDoc accepts at most 20 explicit file IDs per vector request.
+        if len(file_ids) >= 20:
+            break
+    return file_ids
 
 
 def _paper_knowledge_mapping(
@@ -948,13 +1162,15 @@ def _call_maas(
     messages: list[dict[str, str]],
     *,
     system_prompt: str,
-) -> str:
+    max_tokens: int | None = None,
+) -> dict[str, Any]:
     try:
-        return call_finetuned_model(
+        return call_finetuned_model_with_metadata(
             messages=[
                 {"role": "system", "content": system_prompt},
                 *messages,
-            ]
+            ],
+            max_tokens=max_tokens,
         )
     except Exception:
         # The upstream SDK may include request details in exception strings.
@@ -966,15 +1182,20 @@ def _agent_knowledge_answer(
     agent: dict[str, Any],
     message: str,
     top_k: int,
+    user_id: str,
     history: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    retrieval = _retrieve_external_knowledge(message, top_n=top_k)
+    retrieval = _retrieve_external_knowledge(
+        message,
+        top_n=top_k,
+        file_ids=_owned_vectored_file_ids(user_id),
+    )
     citations = retrieval["citations"]
     model_status = model_service_status()
     model = model_status.get("model") if model_status.get("available") else None
     if citations and model_status.get("available"):
         conversation = history or [{"role": "user", "content": message}]
-        reply = _call_maas(
+        model_result = _call_maas(
             conversation,
             system_prompt=_knowledge_system_prompt(
                 str(
@@ -985,9 +1206,12 @@ def _agent_knowledge_answer(
                 knowledge_requested=True,
             ),
         )
+        reply = str(model_result["text"])
+        usage = model_result.get("usage", {})
         response_mode = "xunfei-rag-maas"
     else:
         reply = _evidence_only_answer(citations)
+        usage = {}
         response_mode = "xunfei-evidence-only"
     return {
         "reply": reply,
@@ -999,6 +1223,7 @@ def _agent_knowledge_answer(
         "retrieval_degraded": retrieval["degraded"],
         "response_mode": response_mode,
         "model": model,
+        "usage": usage,
     }
 
 
@@ -1100,12 +1325,13 @@ def _professional_agent_answer(
         prompt_parts.append("【最近对话】\n" + "\n\n".join(history_blocks))
 
     try:
-        reply = generate_reply(
+        model_result = generate_reply_with_metadata(
             system_prompt=str(agent.get("system_prompt") or ""),
             user_message="\n\n".join(prompt_parts),
             agent_category=category,
             user_id=user_id,
         )
+        reply = str(model_result["text"])
     except Exception as exc:
         raise _agent_service_exception(category, exc) from None
 
@@ -1126,6 +1352,7 @@ def _professional_agent_answer(
         ),
         "response_mode": "xunfei-star-agent",
         "model": category,
+        "usage": model_result.get("usage", {}),
     }
 
 
@@ -1189,6 +1416,7 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
                 agent=agent,
                 message=content,
                 top_k=8,
+                user_id=user_id,
                 history=history,
             )
     except Exception:
@@ -1271,6 +1499,7 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
         retrieval_count=len(answer.get("citations") or []),
         latency_ms=elapsed_ms,
         model_latency_ms=elapsed_ms,
+        usage=answer.get("usage"),
     )
     return {
         "reply": answer["reply"],
@@ -1451,6 +1680,42 @@ def login(payload: LoginRequest):
 @router.post("/auth/logout", status_code=204)
 def logout():
     return Response(status_code=204)
+
+
+@router.post("/auth/forgot-password")
+def forgot_password(payload: ForgotPasswordRequest):
+    redirect_to = os.getenv(
+        "PASSWORD_RESET_REDIRECT_URL",
+        "http://localhost:5173/reset-password",
+    ).strip()
+    try:
+        get_supabase_auth_client().auth.reset_password_for_email(
+            payload.email.strip().lower(),
+            options={"redirect_to": redirect_to},
+        )
+    except Exception as exc:
+        # Keep the response generic so callers cannot probe registered emails.
+        logger.info("Password reset email request was not accepted: %s", type(exc).__name__)
+    return {
+        "message": "如果该邮箱已注册，密码重置邮件将很快发送，请检查收件箱。"
+    }
+
+
+@router.post("/auth/reset-password")
+def reset_password(
+    payload: ResetPasswordRequest,
+    user=Depends(get_current_user),
+):
+    try:
+        response = database().auth.admin.update_user_by_id(
+            str(user.id),
+            {"password": payload.password},
+        )
+    except Exception:
+        raise HTTPException(status_code=502, detail="密码更新失败，请重新打开重置链接") from None
+    if not getattr(response, "user", None):
+        raise HTTPException(status_code=502, detail="密码更新失败，请重新打开重置链接")
+    return {"message": "密码已更新，请使用新密码登录。"}
 
 
 @router.get("/users/me")
@@ -2193,6 +2458,15 @@ def _sync_project_workflow(
                         "error_message": job.get("error_message") or "任务执行失败",
                     }
                 )
+            elif job and job.get("status") == "cancelled" and completed_before:
+                updates.update(
+                    {
+                        "status": "ready",
+                        "research_job_id": None,
+                        "started_at": None,
+                        "error_message": "任务已取消，可以重新开始",
+                    }
+                )
             else:
                 output = (
                     _latest_workflow_output(
@@ -2308,7 +2582,7 @@ def create_project(
                 "name": payload.name,
                 "objective": payload.objective.strip() if payload.objective else None,
                 "status": "active",
-                "current_stage": payload.current_stage,
+                "current_stage": "discovery",
             }
         )
         .execute()
@@ -2691,16 +2965,8 @@ def start_project_workflow_task(
         raise HTTPException(status_code=409, detail="当前产物正在等待用户验收")
     if status == "failed":
         raise HTTPException(status_code=409, detail="请使用重试操作恢复失败任务")
-    if status == "ready":
-        _update_workflow_task(
-            task,
-            user_id,
-            {
-                "status": "in_progress",
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "error_message": None,
-            },
-        )
+    # Opening a task is not execution. The durable job created on the feature
+    # page is what transitions the workflow task to in_progress.
     workflow, tasks = _sync_project_workflow(workflow, user_id)
     return _public_workflow(workflow, tasks)
 
@@ -2807,6 +3073,16 @@ def update_project(
     user_id = str(user.id)
     _require_project(project_id, user_id, writable=True)
     updates = payload.model_dump(exclude_unset=True)
+    if "current_stage" in updates:
+        raise HTTPException(
+            status_code=409,
+            detail="项目阶段由科研产物和任务流自动推进，不能手动修改",
+        )
+    if updates.get("status") == "completed":
+        raise HTTPException(
+            status_code=409,
+            detail="请使用项目完成操作，并先通过结果产物校验",
+        )
     if isinstance(updates.get("objective"), str):
         updates["objective"] = updates["objective"].strip() or None
     result = (
@@ -2821,6 +3097,50 @@ def update_project(
     if not project:
         raise HTTPException(status_code=500, detail="更新科研项目失败")
     return project
+
+
+@router.post("/projects/{project_id}/complete")
+def complete_project(project_id: str, user=Depends(get_current_user)):
+    user_id = str(user.id)
+    project = _require_project(project_id, user_id, writable=True)
+    if project.get("current_stage") == "completed":
+        return project
+    if project.get("current_stage") != "analysis":
+        raise HTTPException(status_code=409, detail="项目尚未进入结果分析阶段")
+    artifact = (
+        database()
+        .table("research_artifacts")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("project_id", project_id)
+        .eq("artifact_type", "result-analysis")
+        .eq("status", "completed")
+        .limit(1)
+        .execute()
+    )
+    if not artifact.data:
+        raise HTTPException(status_code=409, detail="请先完成并保存结果分析产物")
+    result = (
+        database()
+        .table("research_projects")
+        .update({"current_stage": "completed", "status": "completed"})
+        .eq("id", project_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    completed = _first(result)
+    if not completed:
+        raise HTTPException(status_code=409, detail="项目状态已变化，请刷新后重试")
+    record_activity(
+        user_id,
+        "project",
+        "完成科研项目",
+        str(completed.get("name") or "科研项目"),
+        entity_type="project",
+        entity_id=project_id,
+        project_id=project_id,
+    )
+    return completed
 
 
 @router.post("/projects/{project_id}/archive")
@@ -3022,6 +3342,12 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
                     row_count=int(input_data.get("row_count") or 0),
                     project_id=input_data.get("project_id"),
                     repo_id=input_data.get("repo_id"),
+                    experiment_run_id=input_data.get("experiment_run_id"),
+                    result_file=(
+                        input_data.get("result_file")
+                        if isinstance(input_data.get("result_file"), dict)
+                        else None
+                    ),
                     user_id=user_id,
                 )
         except HTTPException as exc:
@@ -3360,6 +3686,31 @@ def retry_research_job(job_id: str, user=Depends(get_current_user)):
             database()
             .table("paper_reports")
             .update({"status": "pending", "error_message": None})
+            .eq("paper_id", paper_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+    return _public_research_job(job)
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=ResearchJobResponse)
+def cancel_research_job(job_id: str, user=Depends(get_current_user)):
+    user_id = str(user.id)
+    job = cancel_owned_research_job(job_id, user_id)
+    if job.get("job_type") == "paper-analysis" and job.get("paper_id"):
+        paper_id = str(job["paper_id"])
+        (
+            database()
+            .table("papers")
+            .update({"status": "failed", "error_message": "论文分析已由用户取消"})
+            .eq("id", paper_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        (
+            database()
+            .table("paper_reports")
+            .update({"status": "failed", "error_message": "论文分析已由用户取消"})
             .eq("paper_id", paper_id)
             .eq("user_id", user_id)
             .execute()
@@ -3728,6 +4079,7 @@ def ask_agent_with_knowledge(
         agent=agent,
         message=message,
         top_k=payload.top_k,
+        user_id=user_id,
     )
     record_activity(
         user_id,
@@ -3937,6 +4289,186 @@ def upsert_message_feedback(
     return saved
 
 
+def _admin_user_payload(auth_user: Any, profile: dict[str, Any]) -> dict[str, Any]:
+    metadata = getattr(auth_user, "user_metadata", None) or {}
+    email = str(getattr(auth_user, "email", "") or "")
+    return {
+        "id": str(auth_user.id),
+        "email": email,
+        "username": str(
+            profile.get("username")
+            or metadata.get("username")
+            or metadata.get("name")
+            or (email.split("@", 1)[0] if email else "研究者")
+        ),
+        "role": str(profile.get("role") or "user"),
+        "email_confirmed_at": str(
+            getattr(auth_user, "email_confirmed_at", None)
+            or getattr(auth_user, "confirmed_at", None)
+        )
+        if (
+            getattr(auth_user, "email_confirmed_at", None)
+            or getattr(auth_user, "confirmed_at", None)
+        )
+        else None,
+        "last_sign_in_at": (
+            str(getattr(auth_user, "last_sign_in_at", None))
+            if getattr(auth_user, "last_sign_in_at", None)
+            else None
+        ),
+        "created_at": (
+            str(getattr(auth_user, "created_at", None))
+            if getattr(auth_user, "created_at", None)
+            else None
+        ),
+    }
+
+
+@router.get("/admin/users", response_model=AdminUserListResponse)
+def list_admin_users(user=Depends(get_current_admin)):
+    try:
+        auth_users = database().auth.admin.list_users(page=1, per_page=1000)
+    except Exception:
+        raise HTTPException(status_code=502, detail="用户目录暂时不可用") from None
+    user_ids = [str(item.id) for item in auth_users]
+    profiles: list[dict[str, Any]] = []
+    if user_ids:
+        profiles = (
+            database()
+            .table("profiles")
+            .select("id,username,role,created_at")
+            .in_("id", user_ids)
+            .execute()
+            .data
+            or []
+        )
+    profile_map = {str(item["id"]): item for item in profiles}
+    items = [
+        _admin_user_payload(item, profile_map.get(str(item.id), {}))
+        for item in auth_users
+    ]
+    items.sort(key=lambda item: (item["role"] != "admin", item["created_at"] or ""))
+    return {"items": items, "total": len(items)}
+
+
+@router.patch("/admin/users/{target_user_id}/role", response_model=AdminUserResponse)
+def update_admin_user_role(
+    target_user_id: str,
+    payload: AdminRoleChangeRequest,
+    user=Depends(get_current_admin),
+):
+    try:
+        normalized_user_id = str(uuid.UUID(target_user_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="用户 ID 格式不正确") from None
+    profile = _first(
+        database()
+        .table("profiles")
+        .select("id,username,role,created_at")
+        .eq("id", normalized_user_id)
+        .limit(1)
+        .execute()
+    )
+    if not profile:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    previous_role = str(profile.get("role") or "user")
+    if previous_role == payload.role:
+        try:
+            auth_user = database().auth.admin.get_user_by_id(normalized_user_id).user
+        except Exception:
+            raise HTTPException(status_code=502, detail="用户目录暂时不可用") from None
+        if not auth_user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        return _admin_user_payload(auth_user, profile)
+
+    if previous_role == "admin" and payload.role == "user":
+        admins = (
+            database()
+            .table("profiles")
+            .select("id")
+            .eq("role", "admin")
+            .limit(2)
+            .execute()
+            .data
+            or []
+        )
+        if len(admins) <= 1:
+            raise HTTPException(status_code=409, detail="不能降级系统中的最后一名管理员")
+
+    try:
+        saved = _first(
+            database()
+            .table("profiles")
+            .update({"role": payload.role})
+            .eq("id", normalized_user_id)
+            .execute()
+        )
+    except Exception as exc:
+        if "last administrator" in str(exc).lower():
+            raise HTTPException(
+                status_code=409,
+                detail="不能降级系统中的最后一名管理员",
+            ) from None
+        raise HTTPException(status_code=500, detail="角色更新失败") from None
+    if not saved:
+        raise HTTPException(status_code=500, detail="角色更新失败")
+    try:
+        database().table("admin_role_audits").insert(
+            {
+                "target_user_id": normalized_user_id,
+                "actor_user_id": str(user.id),
+                "previous_role": previous_role,
+                "new_role": payload.role,
+                "source": "admin-api",
+                "reason": payload.reason,
+            }
+        ).execute()
+    except Exception:
+        database().table("profiles").update({"role": previous_role}).eq(
+            "id", normalized_user_id
+        ).execute()
+        raise HTTPException(
+            status_code=500,
+            detail="审计记录保存失败，角色变更已回滚",
+        ) from None
+    try:
+        auth_user = database().auth.admin.get_user_by_id(normalized_user_id).user
+    except Exception:
+        auth_user = None
+    if not auth_user:
+        raise HTTPException(status_code=502, detail="角色已更新，但用户目录暂时不可用")
+    record_activity(
+        str(user.id),
+        "admin",
+        "调整用户角色",
+        f"{previous_role} -> {payload.role}",
+        entity_type="profile",
+        entity_id=normalized_user_id,
+        metadata={"previous_role": previous_role, "new_role": payload.role},
+    )
+    return _admin_user_payload(auth_user, saved)
+
+
+@router.get("/admin/role-audits", response_model=AdminRoleAuditListResponse)
+def list_admin_role_audits(
+    limit: int = Query(default=50, ge=1, le=200),
+    user=Depends(get_current_admin),
+):
+    rows = (
+        database()
+        .table("admin_role_audits")
+        .select(
+            "id,target_user_id,actor_user_id,previous_role,new_role,source,reason,created_at"
+        )
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+        .data
+        or []
+    )
+    return {"items": rows, "total": len(rows)}
+
+
 @router.get(
     "/admin/feedback",
     response_model=AdminFeedbackListResponse,
@@ -4007,6 +4539,113 @@ def review_message_feedback(
     return saved
 
 
+def _ai_metrics(rows: list[dict[str, Any]], hours: int) -> dict[str, Any]:
+    total = len(rows)
+    statuses = Counter(str(row.get("status") or "") for row in rows)
+    sources = Counter(str(row.get("usage_source") or "unavailable") for row in rows)
+    module_rows: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        module_rows.setdefault(str(row.get("module") or "unknown"), []).append(row)
+
+    by_module = []
+    for module, items in sorted(module_rows.items()):
+        module_status = Counter(str(item.get("status") or "") for item in items)
+        by_module.append(
+            {
+                "module": module,
+                "total_runs": len(items),
+                "failed_count": module_status["failed"],
+                "degraded_count": module_status["degraded"],
+                "p95_latency_ms": _percentile_95(
+                    [max(0, int(item.get("latency_ms") or 0)) for item in items]
+                ),
+            }
+        )
+    known_costs = [
+        float(row["estimated_cost_cny"])
+        for row in rows
+        if row.get("estimated_cost_cny") is not None
+    ]
+    return {
+        "hours": hours,
+        "total_runs": total,
+        "succeeded_count": statuses["succeeded"],
+        "degraded_count": statuses["degraded"],
+        "failed_count": statuses["failed"],
+        "failure_rate": statuses["failed"] / total if total else 0,
+        "degraded_rate": statuses["degraded"] / total if total else 0,
+        "p95_latency_ms": _percentile_95(
+            [max(0, int(row.get("latency_ms") or 0)) for row in rows]
+        ),
+        "input_tokens": sum(max(0, int(row.get("input_tokens") or 0)) for row in rows),
+        "output_tokens": sum(max(0, int(row.get("output_tokens") or 0)) for row in rows),
+        "estimated_cost_cny": round(sum(known_costs), 6),
+        "unknown_cost_runs": total - len(known_costs),
+        "usage_sources": dict(sources),
+        "by_module": by_module,
+    }
+
+
+@router.get("/admin/ai-metrics", response_model=AiMetricsResponse)
+def get_ai_metrics(
+    hours: int = Query(default=24, ge=1, le=720),
+    user=Depends(get_current_admin),
+):
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    rows = (
+        database()
+        .table("ai_runs")
+        .select(
+            "module,status,latency_ms,input_tokens,output_tokens,usage_source,"
+            "estimated_cost_cny,created_at"
+        )
+        .gte("created_at", cutoff)
+        .order("created_at", desc=True)
+        .limit(5000)
+        .execute()
+        .data
+        or []
+    )
+    return _ai_metrics(rows, hours)
+
+
+@router.get("/admin/ai-alerts", response_model=AiAlertListResponse)
+def list_ai_alerts(
+    status: str = Query(default="open", pattern="^(open|acknowledged|all)$"),
+    limit: int = Query(default=50, ge=1, le=200),
+    user=Depends(get_current_admin),
+):
+    query = database().table("ai_alerts").select(
+        "id,module,alert_type,severity,status,title,detail,metric_value,"
+        "threshold_value,occurrence_count,first_seen_at,last_seen_at,"
+        "acknowledged_at,acknowledged_by"
+    )
+    if status != "all":
+        query = query.eq("status", status)
+    rows = query.order("last_seen_at", desc=True).limit(limit).execute().data or []
+    return {"items": rows, "total": len(rows)}
+
+
+@router.patch("/admin/ai-alerts/{alert_id}/acknowledge", response_model=AiAlertResponse)
+def acknowledge_ai_alert(alert_id: str, user=Depends(get_current_admin)):
+    saved = _first(
+        database()
+        .table("ai_alerts")
+        .update(
+            {
+                "status": "acknowledged",
+                "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+                "acknowledged_by": str(user.id),
+            }
+        )
+        .eq("id", alert_id)
+        .execute()
+    )
+    if not saved:
+        raise HTTPException(status_code=404, detail="告警不存在")
+    return saved
+
+
 @router.get(
     "/admin/evaluations/suites",
     response_model=list[EvaluationSuiteResponse],
@@ -4074,10 +4713,10 @@ def run_quality_evaluation(
     payload: EvaluationRunRequest,
     user=Depends(get_current_admin),
 ):
-    if payload.mode != "offline":
+    if payload.mode == "real-model" and not payload.confirm_external_calls:
         raise HTTPException(
             status_code=409,
-            detail="真实模型评测需要单独审批，本接口当前只允许离线评测",
+            detail="真实模型评测会产生外部调用，请先明确确认",
         )
     suite = _first(
         database()
@@ -4091,7 +4730,10 @@ def run_quality_evaluation(
     )
     if not suite:
         raise HTTPException(status_code=404, detail="评测集不存在或未启用")
-    if suite.get("module") != "rag-retrieval":
+    expected_module = (
+        "rag-retrieval" if payload.mode == "offline" else "real-model-smoke"
+    )
+    if suite.get("module") != expected_module:
         raise HTTPException(status_code=400, detail="当前不支持该评测集类型")
     cases = (
         database()
@@ -4105,8 +4747,11 @@ def run_quality_evaluation(
     )
     if not cases:
         raise HTTPException(status_code=409, detail="评测集没有可运行用例")
+    if payload.mode == "real-model" and len(cases) > 6:
+        raise HTTPException(status_code=409, detail="真实模型冒烟评测最多允许 6 个用例")
 
     started_at = datetime.now(timezone.utc).isoformat()
+    is_real = payload.mode == "real-model"
     run = _first(
         database()
         .table("evaluation_runs")
@@ -4114,16 +4759,18 @@ def run_quality_evaluation(
             {
                 "suite_id": suite["id"],
                 "initiated_by": str(user.id),
-                "mode": "offline",
+                "mode": payload.mode,
                 "status": "running",
-                "provider": "deterministic-local",
-                "model": None,
+                "provider": "xunfei-mixed" if is_real else "deterministic-local",
+                "model": "bounded-smoke-v1" if is_real else None,
                 "case_count": len(cases),
                 "config_snapshot": {
                     "suite_slug": suite["slug"],
                     "suite_version": suite["version"],
-                    "top_k": 3,
-                    "external_calls": False,
+                    "top_k": None if is_real else 3,
+                    "external_calls": is_real,
+                    "max_cases": 6 if is_real else len(cases),
+                    "max_output_tokens": 512 if is_real else None,
                 },
                 "started_at": started_at,
             }
@@ -4134,7 +4781,128 @@ def run_quality_evaluation(
         raise HTTPException(status_code=500, detail="创建评测运行失败")
 
     try:
-        evaluation = evaluate_rag_retrieval_cases(cases, top_k=3)
+        if is_real:
+            results = []
+            total_input_tokens = 0
+            total_output_tokens = 0
+            total_cost = 0.0
+            unknown_cost_cases = 0
+            latencies: list[int] = []
+            for case in cases:
+                case_input = case.get("input") if isinstance(case.get("input"), dict) else {}
+                expected = case.get("expected") if isinstance(case.get("expected"), dict) else {}
+                category = str(case_input.get("category") or "").strip()
+                prompt = str(case_input.get("prompt") or "").strip()
+                system_prompt = str(case_input.get("system_prompt") or "").strip()
+                max_tokens = min(512, max(1, int(case_input.get("max_tokens") or 512)))
+                case_started = perf_counter()
+                try:
+                    model_result = generate_reply_with_metadata(
+                        system_prompt=system_prompt,
+                        user_message=prompt,
+                        agent_category=("" if category == "dashboard-chat" else category),
+                        user_id=str(user.id),
+                        max_tokens=max_tokens,
+                    )
+                    reply = str(model_result.get("text") or "").strip()
+                    usage = model_result.get("usage") if isinstance(model_result.get("usage"), dict) else {}
+                    latency_ms = round((perf_counter() - case_started) * 1000)
+                    latencies.append(latency_ms)
+                    total_input_tokens += max(0, int(usage.get("input_tokens") or 0))
+                    total_output_tokens += max(0, int(usage.get("output_tokens") or 0))
+                    if usage.get("estimated_cost_cny") is None:
+                        unknown_cost_cases += 1
+                    else:
+                        total_cost += max(0.0, float(usage["estimated_cost_cny"]))
+
+                    required_any = [
+                        str(item) for item in expected.get("required_any", [])
+                    ]
+                    forbidden = [str(item) for item in expected.get("forbidden", [])]
+                    min_length = max(1, int(expected.get("min_length") or 1))
+                    matched = [item for item in required_any if item in reply]
+                    forbidden_hits = [item for item in forbidden if item in reply]
+                    passed = (
+                        len(reply) >= min_length
+                        and (not required_any or bool(matched))
+                        and not forbidden_hits
+                    )
+                    diagnostic = (
+                        f"length={len(reply)}; required_matches={len(matched)}/"
+                        f"{len(required_any)}; forbidden_hits={len(forbidden_hits)}; "
+                        f"output_sha256={hashlib.sha256(reply.encode('utf-8')).hexdigest()}"
+                    )
+                    _record_ai_run(
+                        user_id=str(user.id),
+                        module=f"evaluation:{category or 'default'}",
+                        provider=(
+                            "xunfei-maas"
+                            if category == "dashboard-chat"
+                            else "xunfei-star-agent"
+                        ),
+                        model=category or "dashboard-chat",
+                        status="succeeded" if passed else "degraded",
+                        response_mode="real-model-smoke",
+                        fallback_reason=None if passed else "expectation-mismatch",
+                        latency_ms=latency_ms,
+                        model_latency_ms=latency_ms,
+                        usage=usage,
+                    )
+                    results.append(
+                        {
+                            "case_id": case["id"],
+                            "status": "passed" if passed else "failed",
+                            "rank": None,
+                            "metrics": {
+                                "latency_ms": latency_ms,
+                                "input_tokens": int(usage.get("input_tokens") or 0),
+                                "output_tokens": int(usage.get("output_tokens") or 0),
+                            },
+                            "diagnostic": diagnostic,
+                        }
+                    )
+                except Exception as exc:
+                    latency_ms = round((perf_counter() - case_started) * 1000)
+                    latencies.append(latency_ms)
+                    _record_ai_run(
+                        user_id=str(user.id),
+                        module=f"evaluation:{category or 'default'}",
+                        provider=(
+                            "xunfei-maas"
+                            if category == "dashboard-chat"
+                            else "xunfei-star-agent"
+                        ),
+                        model=category or "dashboard-chat",
+                        status="failed",
+                        fallback_reason="provider-error",
+                        latency_ms=latency_ms,
+                        model_latency_ms=latency_ms,
+                    )
+                    results.append(
+                        {
+                            "case_id": case["id"],
+                            "status": "failed",
+                            "rank": None,
+                            "metrics": {"latency_ms": latency_ms},
+                            "diagnostic": f"provider_error={type(exc).__name__}: {str(exc)[:300]}",
+                        }
+                    )
+            passed_count = sum(1 for item in results if item["status"] == "passed")
+            evaluation = {
+                "results": results,
+                "passed_count": passed_count,
+                "failed_count": len(results) - passed_count,
+                "metrics": {
+                    "pass_rate": passed_count / len(results) if results else 0,
+                    "p95_latency_ms": _percentile_95(latencies),
+                    "input_tokens": total_input_tokens,
+                    "output_tokens": total_output_tokens,
+                    "estimated_cost_cny": round(total_cost, 6),
+                    "unknown_cost_cases": unknown_cost_cases,
+                },
+            }
+        else:
+            evaluation = evaluate_rag_retrieval_cases(cases, top_k=3)
         result_rows = [
             {
                 "run_id": run["id"],
@@ -4164,7 +4932,7 @@ def run_quality_evaluation(
             .execute()
         )
     except Exception as exc:
-        logger.exception("Offline quality evaluation failed")
+        logger.exception("Quality evaluation failed mode=%s", payload.mode)
         database().table("evaluation_runs").update(
             {
                 "status": "failed",
@@ -4172,18 +4940,18 @@ def run_quality_evaluation(
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }
         ).eq("id", run["id"]).execute()
-        raise HTTPException(status_code=500, detail="离线评测执行失败") from None
+        raise HTTPException(status_code=500, detail="评测执行失败") from None
 
     if not saved:
         raise HTTPException(status_code=500, detail="保存评测结果失败")
     record_activity(
         str(user.id),
         "ai-quality",
-        "运行离线评测",
+        "运行真实模型评测" if is_real else "运行离线评测",
         str(suite["slug"]),
         entity_type="evaluation_run",
         entity_id=str(run["id"]),
-        metadata={"mode": "offline", "metrics": evaluation["metrics"]},
+        metadata={"mode": payload.mode, "metrics": evaluation["metrics"]},
     )
     return saved
 
@@ -4212,7 +4980,7 @@ def legacy_chat(payload: LegacyChatRequest, user=Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 
 
-def _public_knowledge_status() -> dict[str, Any]:
+def _public_knowledge_status(user_id: str) -> dict[str, Any]:
     try:
         status = get_xunfei_knowledge_status()
     except XunfeiKnowledgeBaseError:
@@ -4220,28 +4988,44 @@ def _public_knowledge_status() -> dict[str, Any]:
     except Exception:
         raise _upstream_error("星火知识库") from None
 
+    mappings = (
+        _owned_knowledge_mappings(user_id)
+        if status.get("configured")
+        else []
+    )
+
+    remote_files = {
+        str(item.get("fileId") or item.get("file_id") or ""): item
+        for item in status.get("files") or []
+    }
     files = []
-    for item in status.get("files") or []:
+    for mapping in mappings:
+        file_id = str(mapping.get("provider_file_id") or "").strip()
+        item = remote_files.get(file_id, {})
         files.append(
             {
-                "file_id": item.get("fileId") or item.get("file_id"),
-                "file_name": item.get("fileName") or item.get("file_name"),
-                "status": item.get("fileStatus") or item.get("status") or "unknown",
+                "file_id": file_id or None,
+                "file_name": mapping.get("file_name") or "未命名论文",
+                "status": item.get("fileStatus") or mapping.get("status") or "unknown",
                 "extension": item.get("fileType") or item.get("extension"),
-                "created_at": item.get("createTime") or item.get("created_at"),
+                "created_at": mapping.get("updated_at"),
             }
         )
+    vectored_count = sum(1 for item in mappings if item.get("status") == "vectored")
+    provider_ready = bool(status.get("ready"))
     return {
         "provider": status.get("provider") or "xunfei-chatdoc",
         "configured": bool(status.get("configured")),
-        "ready": bool(status.get("ready")),
+        "ready": provider_ready and vectored_count > 0,
         "repository_name": status.get("repository_name"),
-        "document_count": int(status.get("document_count") or 0),
-        "vectored_count": int(status.get("vectored_count") or 0),
+        "document_count": len(mappings),
+        "vectored_count": vectored_count,
         "files": files,
         "reason": (
             None
-            if status.get("ready")
+            if provider_ready and vectored_count > 0
+            else "当前账号还没有可检索的已向量化论文"
+            if provider_ready
             else "星火知识库尚未完成服务端配置或远端仓库尚未就绪"
         ),
     }
@@ -4250,7 +5034,7 @@ def _public_knowledge_status() -> dict[str, Any]:
 @router.get("/knowledge/status")
 @router.get("/knowledge/xunfei/status")
 def knowledge_status(user=Depends(get_current_user)):
-    return _public_knowledge_status()
+    return _public_knowledge_status(str(user.id))
 
 
 @router.post("/knowledge/search")
@@ -4259,7 +5043,11 @@ def search_knowledge_base(
     user=Depends(get_current_user),
 ):
     query = payload.text
-    retrieval = _retrieve_external_knowledge(query, top_n=payload.top_n)
+    retrieval = _retrieve_external_knowledge(
+        query,
+        top_n=payload.top_n,
+        file_ids=_owned_vectored_file_ids(str(user.id)),
+    )
     citations = retrieval["citations"]
     record_activity(
         str(user.id),
@@ -4294,7 +5082,11 @@ def answer_from_knowledge_base(
     user=Depends(get_current_user),
 ):
     query = payload.text
-    retrieval = _retrieve_external_knowledge(query, top_n=payload.top_n)
+    retrieval = _retrieve_external_knowledge(
+        query,
+        top_n=payload.top_n,
+        file_ids=_owned_vectored_file_ids(str(user.id)),
+    )
     citations = retrieval["citations"]
     status = model_service_status()
     model = status.get("model") if status.get("available") else None
@@ -4484,7 +5276,11 @@ def dashboard_chat(
     citations: list[dict[str, Any]] = []
     if payload.use_knowledge_base:
         try:
-            citations = _search_external_knowledge(query, top_n=6)
+            citations = _search_external_knowledge(
+                query,
+                top_n=6,
+                file_ids=_owned_vectored_file_ids(str(user.id)),
+            )
         except HTTPException as exc:
             if exc.status_code != 502:
                 raise
@@ -4494,7 +5290,7 @@ def dashboard_chat(
     if not status.get("available"):
         raise _upstream_error("对话模型")
     try:
-        reply = _call_maas(
+        model_result = _call_maas(
             history,
             system_prompt=_knowledge_system_prompt(
                 (
@@ -4506,6 +5302,7 @@ def dashboard_chat(
                 and not knowledge_unavailable,
             ),
         )
+        reply = str(model_result["text"])
     except Exception:
         elapsed_ms = round((perf_counter() - started) * 1000)
         _record_ai_run(
@@ -4542,6 +5339,7 @@ def dashboard_chat(
         retrieval_count=len(citations),
         latency_ms=elapsed_ms,
         model_latency_ms=elapsed_ms,
+        usage=model_result.get("usage", {}),
     )
     record_activity(
         str(user.id),
@@ -5463,6 +6261,247 @@ def get_repository_analysis(artifact_id: str, user=Depends(get_current_user)):
     return _artifact_response(artifact)
 
 
+def _experiment_run_response(row: dict[str, Any]) -> dict[str, Any]:
+    environment = row.get("environment")
+    output_files = row.get("output_files")
+    return {
+        "id": str(row["id"]),
+        "project_id": row.get("project_id"),
+        "code_artifact_id": str(row["code_artifact_id"]),
+        "result_artifact_id": row.get("result_artifact_id"),
+        "execution_mode": str(row.get("execution_mode") or "manual-evidence"),
+        "status": str(row.get("status") or "planned"),
+        "commit_sha": str(row.get("commit_sha") or ""),
+        "command": str(row.get("command") or ""),
+        "environment": environment if isinstance(environment, dict) else {},
+        "notes": row.get("notes"),
+        "exit_code": row.get("exit_code"),
+        "stdout_excerpt": row.get("stdout_excerpt"),
+        "stderr_excerpt": row.get("stderr_excerpt"),
+        "output_files": output_files if isinstance(output_files, list) else [],
+        "started_at": row.get("started_at"),
+        "completed_at": row.get("completed_at"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _environment_contains_sensitive_key(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if any(
+                marker in normalized
+                for marker in ("apikey", "apisecret", "password", "passwd", "token")
+            ):
+                return True
+            if _environment_contains_sensitive_key(nested):
+                return True
+    elif isinstance(value, list):
+        return any(_environment_contains_sensitive_key(item) for item in value)
+    return False
+
+
+def _owned_experiment_run(run_id: str, user_id: str) -> dict[str, Any]:
+    return require_owned_row("experiment_runs", run_id, user_id)
+
+
+def _resolve_experiment_run_for_results(
+    run_id: str | None,
+    user_id: str,
+    repo_id: str | None,
+) -> dict[str, Any] | None:
+    if not run_id:
+        return None
+    run = _owned_experiment_run(run_id, user_id)
+    if run.get("status") != "succeeded":
+        raise HTTPException(status_code=409, detail="请先完成实验运行并提交成功证据")
+    if repo_id and str(run.get("code_artifact_id")) != repo_id:
+        raise HTTPException(status_code=409, detail="实验运行与所选代码复现产物不一致")
+    if run.get("result_artifact_id"):
+        raise HTTPException(status_code=409, detail="该实验运行已经关联结果分析")
+    return run
+
+
+def _link_result_artifact_to_experiment_run(
+    run: dict[str, Any] | None,
+    user_id: str,
+    artifact_id: str,
+    result_file: dict[str, Any] | None,
+) -> None:
+    if not run:
+        return
+    output_files = run.get("output_files")
+    normalized_files = [
+        item for item in (output_files if isinstance(output_files, list) else [])
+        if isinstance(item, dict)
+    ]
+    if result_file and result_file.get("name"):
+        name = str(result_file["name"])
+        normalized_files = [
+            item for item in normalized_files if str(item.get("name") or "") != name
+        ]
+        normalized_files.append(result_file)
+    result = (
+        database()
+        .table("experiment_runs")
+        .update(
+            {
+                "result_artifact_id": artifact_id,
+                "output_files": normalized_files[:50],
+            }
+        )
+        .eq("id", str(run["id"]))
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=500, detail="关联实验运行与结果分析失败")
+
+
+@router.post(
+    "/experiment-runs",
+    status_code=201,
+    response_model=ExperimentRunResponse,
+)
+def create_experiment_run(
+    payload: CreateExperimentRunRequest,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    code_artifact = _resolve_confirmed_artifact(
+        payload.code_artifact_id,
+        user_id,
+        "code-reproduction",
+    )
+    if _environment_contains_sensitive_key(payload.environment):
+        raise HTTPException(
+            status_code=422,
+            detail="环境快照不能包含密码、Token、API Key 或 API Secret",
+        )
+    result = (
+        database()
+        .table("experiment_runs")
+        .insert(
+            {
+                "user_id": user_id,
+                "project_id": code_artifact.get("project_id"),
+                "code_artifact_id": str(code_artifact["id"]),
+                "execution_mode": "manual-evidence",
+                "status": "planned",
+                "commit_sha": payload.commit_sha.lower(),
+                "command": payload.command,
+                "environment": payload.environment,
+                "notes": payload.notes,
+            }
+        )
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=500, detail="创建实验运行记录失败")
+    run = result.data[0]
+    record_activity(
+        user_id,
+        "experiment",
+        "创建实验运行记录",
+        payload.commit_sha[:12],
+        entity_type="experiment-run",
+        entity_id=str(run["id"]),
+        project_id=code_artifact.get("project_id"),
+    )
+    return _experiment_run_response(run)
+
+
+@router.get("/experiment-runs", response_model=ExperimentRunListResponse)
+def list_experiment_runs(
+    code_artifact_id: str | None = None,
+    project_id: str | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    query = database().table("experiment_runs").select("*").eq("user_id", user_id)
+    if code_artifact_id:
+        query = query.eq("code_artifact_id", code_artifact_id)
+    if project_id:
+        query = query.eq("project_id", project_id)
+    result = query.order("created_at", desc=True).limit(limit).execute()
+    return {
+        "items": [
+            _experiment_run_response(row)
+            for row in (result.data or [])
+            if isinstance(row, dict)
+        ]
+    }
+
+
+@router.get("/experiment-runs/{run_id}", response_model=ExperimentRunResponse)
+def get_experiment_run(run_id: str, user=Depends(get_current_user)):
+    return _experiment_run_response(
+        _owned_experiment_run(run_id, str(user.id))
+    )
+
+
+@router.patch("/experiment-runs/{run_id}", response_model=ExperimentRunResponse)
+def update_experiment_run(
+    run_id: str,
+    payload: UpdateExperimentRunRequest,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    run = _owned_experiment_run(run_id, user_id)
+    current_status = str(run.get("status") or "planned")
+    allowed_transitions = {
+        "planned": {"running", "cancelled"},
+        "running": {"succeeded", "failed", "cancelled"},
+    }
+    if payload.status not in allowed_transitions.get(current_status, set()):
+        raise HTTPException(
+            status_code=409,
+            detail=f"实验运行不能从 {current_status} 变更为 {payload.status}",
+        )
+    now = datetime.now(timezone.utc).isoformat()
+    updates: dict[str, Any] = {"status": payload.status}
+    if payload.status == "running":
+        updates["started_at"] = run.get("started_at") or now
+    else:
+        updates.update(
+            {
+                "started_at": run.get("started_at") or now,
+                "completed_at": now,
+                "exit_code": payload.exit_code,
+                "stdout_excerpt": payload.stdout_excerpt,
+                "stderr_excerpt": payload.stderr_excerpt,
+                "output_files": [
+                    item.model_dump(exclude_none=True) for item in payload.output_files
+                ],
+            }
+        )
+    if payload.notes is not None:
+        updates["notes"] = payload.notes.strip() or None
+    result = (
+        database()
+        .table("experiment_runs")
+        .update(updates)
+        .eq("id", run_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=500, detail="更新实验运行记录失败")
+    updated = result.data[0]
+    record_activity(
+        user_id,
+        "experiment",
+        "更新实验运行状态",
+        payload.status,
+        entity_type="experiment-run",
+        entity_id=run_id,
+        project_id=run.get("project_id"),
+    )
+    return _experiment_run_response(updated)
+
+
 @router.post("/code/diagnose")
 def diagnose_repository(payload: DiagnoseRequest, user=Depends(get_current_user)):
     user_id = str(user.id)
@@ -5556,18 +6595,32 @@ def _analyze_result_summary(
     row_count: int,
     project_id: str | None,
     repo_id: str | None,
+    experiment_run_id: str | None,
+    result_file: dict[str, Any] | None,
     user_id: str,
 ) -> dict[str, Any]:
+    experiment_run = _resolve_experiment_run_for_results(
+        experiment_run_id,
+        user_id,
+        repo_id,
+    )
+    resolved_repo_id = repo_id or (
+        str(experiment_run.get("code_artifact_id")) if experiment_run else None
+    )
     source_repository = None
-    if repo_id:
+    if resolved_repo_id:
         source_repository = _resolve_confirmed_artifact(
-            repo_id,
+            resolved_repo_id,
             user_id,
             "code-reproduction",
         )
     resolved_project_id = _resolve_linked_project_id(
         project_id,
-        source_repository.get("project_id") if source_repository else None,
+        (
+            experiment_run.get("project_id")
+            if experiment_run
+            else source_repository.get("project_id") if source_repository else None
+        ),
         user_id,
     )
     if not isinstance(parsed_config, dict):
@@ -5629,6 +6682,8 @@ def _analyze_result_summary(
         "suggestions": suggestions,
         "row_count": row_count,
         "generation_mode": "local-statistics+xunfei-star-agent",
+        "experiment_run_id": experiment_run_id,
+        "code_artifact_id": resolved_repo_id,
     }
     artifact = _save_artifact(
         user_id,
@@ -5637,10 +6692,18 @@ def _analyze_result_summary(
         {
             "file_name": file_name,
             "config": parsed_config,
-            "repo_id": repo_id,
+            "repo_id": resolved_repo_id,
+            "experiment_run_id": experiment_run_id,
+            "result_file": result_file,
         },
         result_content,
         resolved_project_id,
+    )
+    _link_result_artifact_to_experiment_run(
+        experiment_run,
+        user_id,
+        str(artifact["id"]),
+        result_file,
     )
     _advance_project_stage(resolved_project_id, user_id, "analysis")
     record_activity(
@@ -5661,19 +6724,32 @@ async def analyze_results(
     config: str | None = Form(default=None),
     project_id: str | None = Form(default=None),
     repo_id: str | None = Form(default=None),
+    experiment_run_id: str | None = Form(default=None),
     user=Depends(get_current_user),
 ):
     user_id = str(user.id)
+    experiment_run = _resolve_experiment_run_for_results(
+        experiment_run_id,
+        user_id,
+        repo_id,
+    )
+    resolved_repo_id = repo_id or (
+        str(experiment_run.get("code_artifact_id")) if experiment_run else None
+    )
     source_repository = None
-    if repo_id:
+    if resolved_repo_id:
         source_repository = _resolve_confirmed_artifact(
-            repo_id,
+            resolved_repo_id,
             user_id,
             "code-reproduction",
         )
     project_id = _resolve_linked_project_id(
         project_id,
-        source_repository.get("project_id") if source_repository else None,
+        (
+            experiment_run.get("project_id")
+            if experiment_run
+            else source_repository.get("project_id") if source_repository else None
+        ),
         user_id,
     )
     raw = await file.read(20 * 1024 * 1024 + 1)
@@ -5774,6 +6850,14 @@ async def analyze_results(
         "suggestions": suggestions,
         "row_count": len(rows),
         "generation_mode": "local-statistics+xunfei-star-agent",
+        "experiment_run_id": experiment_run_id,
+        "code_artifact_id": resolved_repo_id,
+    }
+    result_file = {
+        "name": file.filename or "results.csv",
+        "size_bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "media_type": file.content_type or "application/octet-stream",
     }
     artifact = _save_artifact(
         user_id,
@@ -5782,10 +6866,18 @@ async def analyze_results(
         {
             "file_name": file.filename,
             "config": parsed_config,
-            "repo_id": repo_id,
+            "repo_id": resolved_repo_id,
+            "experiment_run_id": experiment_run_id,
+            "result_file": result_file,
         },
         result_content,
         project_id,
+    )
+    _link_result_artifact_to_experiment_run(
+        experiment_run,
+        user_id,
+        str(artifact["id"]),
+        result_file,
     )
     _advance_project_stage(project_id, user_id, "analysis")
     record_activity(
@@ -5810,19 +6902,32 @@ async def enqueue_result_analysis(
     config: str | None = Form(default=None),
     project_id: str | None = Form(default=None),
     repo_id: str | None = Form(default=None),
+    experiment_run_id: str | None = Form(default=None),
     user=Depends(get_current_user),
 ):
     user_id = str(user.id)
+    experiment_run = _resolve_experiment_run_for_results(
+        experiment_run_id,
+        user_id,
+        repo_id,
+    )
+    resolved_repo_id = repo_id or (
+        str(experiment_run.get("code_artifact_id")) if experiment_run else None
+    )
     source_repository = None
-    if repo_id:
+    if resolved_repo_id:
         source_repository = _resolve_confirmed_artifact(
-            repo_id,
+            resolved_repo_id,
             user_id,
             "code-reproduction",
         )
     resolved_project_id = _resolve_linked_project_id(
         project_id,
-        source_repository.get("project_id") if source_repository else None,
+        (
+            experiment_run.get("project_id")
+            if experiment_run
+            else source_repository.get("project_id") if source_repository else None
+        ),
         user_id,
     )
 
@@ -5852,7 +6957,14 @@ async def enqueue_result_analysis(
         "stats": stats,
         "row_count": len(rows),
         "project_id": resolved_project_id,
-        "repo_id": repo_id,
+        "repo_id": resolved_repo_id,
+        "experiment_run_id": experiment_run_id,
+        "result_file": {
+            "name": file_name,
+            "size_bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "media_type": file.content_type or "application/octet-stream",
+        },
     }
     return _enqueue_agent_job(
         user_id=user_id,

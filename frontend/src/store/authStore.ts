@@ -3,7 +3,8 @@ import { persist } from 'zustand/middleware';
 import type { User, AuthState } from '@/types';
 
 interface AuthStore extends AuthState {
-  login: (user: User, token: string) => void;
+  rememberSession: boolean;
+  login: (user: User, token: string, rememberSession?: boolean) => void;
   logout: () => void;
   setUser: (user: User | null) => void;
   setLoading: (loading: boolean) => void;
@@ -17,13 +18,15 @@ export const useAuthStore = create<AuthStore>()(
       token: null,
       isAuthenticated: false,
       isLoading: false,
+      rememberSession: true,
 
-      login: (user, token) =>
+      login: (user, token, rememberSession = true) =>
         set({
           user,
           token,
           isAuthenticated: true,
           isLoading: false,
+          rememberSession,
         }),
 
       logout: () =>
@@ -32,6 +35,7 @@ export const useAuthStore = create<AuthStore>()(
           token: null,
           isAuthenticated: false,
           isLoading: false,
+          rememberSession: true,
         }),
 
       setUser: (user) => set({ user }),
@@ -46,9 +50,10 @@ export const useAuthStore = create<AuthStore>()(
     {
       name: 'scipilot-auth',
       partialize: (state) => ({
-        user: state.user,
-        token: state.token,
-        isAuthenticated: state.isAuthenticated,
+        user: state.rememberSession ? state.user : null,
+        token: state.rememberSession ? state.token : null,
+        isAuthenticated: state.rememberSession ? state.isAuthenticated : false,
+        rememberSession: state.rememberSession,
       }),
     }
   )

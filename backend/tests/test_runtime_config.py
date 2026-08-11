@@ -25,8 +25,8 @@ class RuntimeConfigTests(unittest.TestCase):
             env_path = Path(directory) / ".env"
             env_path.write_text(
                 "SUPABASE_URL=https://project.supabase.co\n"
-                "SUPABASE_ANON_KEY=anon-placeholder\n"
-                "SUPABASE_SERVICE_ROLE_KEY=service-placeholder\n",
+                "SUPABASE_ANON_KEY=ey-test-anon-value\n"
+                "SUPABASE_SERVICE_ROLE_KEY=ey-test-service-value\n",
                 encoding="utf-8",
             )
             with (
@@ -41,8 +41,8 @@ class RuntimeConfigTests(unittest.TestCase):
             env_path = Path(directory) / ".env"
             env_path.write_text(
                 "SUPABASE_URL=https://missing-project.supabase.co\n"
-                "SUPABASE_ANON_KEY=anon-placeholder\n"
-                "SUPABASE_SERVICE_ROLE_KEY=service-placeholder\n",
+                "SUPABASE_ANON_KEY=ey-test-anon-value\n"
+                "SUPABASE_SERVICE_ROLE_KEY=ey-test-service-value\n",
                 encoding="utf-8",
             )
             with (

@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Code2, Search, Folder, File, ChevronRight, ChevronDown, Copy, Check, Terminal, AlertCircle, Loader2, ArrowRight, BarChart3, ArrowUp, ArrowDown, Plus, Trash2 } from 'lucide-react';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
 import ArtifactReviewToolbar, { mergeArtifactDetail } from '@/components/ArtifactReviewToolbar';
+import ExperimentRunPanel from '@/components/ExperimentRunPanel';
 import ProjectContextBar from '@/components/ProjectContextBar';
 import { useDurableResearchJob } from '@/hooks/useDurableResearchJob';
 import { artifactAPI, codeAPI } from '@/services/api';
@@ -104,6 +105,7 @@ function CodeReproduce() {
     isRunning: isJobRunning,
     track: trackJob,
     retry: retryJob,
+    cancel: cancelJob,
   } = useDurableResearchJob<CodeReproduction>({
     storageKey: jobStorageKey,
     jobType: 'code-reproduction',
@@ -294,9 +296,12 @@ function CodeReproduce() {
           </button>
         </div>
         {isJobRunning && (
-          <p className="mt-3 text-sm text-sci-muted">
-            智能体正在后台分析仓库，当前进度 {job?.progress ?? 0}%。刷新页面后任务会继续。
-          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-sci-muted">
+            <span>智能体正在后台分析仓库，当前进度 {job?.progress ?? 0}%。刷新页面后任务会继续。</span>
+            <button type="button" onClick={() => void cancelJob()} className="sci-btn-secondary text-xs">
+              取消任务
+            </button>
+          </div>
         )}
         {job?.status === 'failed' && (
           <button type="button" onClick={() => void retryJob()} className="sci-btn-secondary mt-3">
@@ -453,6 +458,13 @@ function CodeReproduce() {
               </div>
             </div>
           </div>
+
+          {reproduction.review_status === 'confirmed' && reproduction.id && (
+            <ExperimentRunPanel
+              codeArtifactId={reproduction.id}
+              projectId={reproduction.project_id}
+            />
+          )}
 
           {/* Error Diagnosis */}
           <div className="sci-card">

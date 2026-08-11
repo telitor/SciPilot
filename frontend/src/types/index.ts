@@ -4,6 +4,8 @@ export interface User {
   email: string;
   username: string;
   avatar_url?: string;
+  bio?: string | null;
+  preferences?: Record<string, unknown>;
   role: 'user' | 'admin';
   created_at: string;
 }
@@ -118,6 +120,10 @@ export interface AiRunSummary {
   retrieval_count: number;
   latency_ms: number;
   model_latency_ms?: number | null;
+  input_tokens?: number;
+  output_tokens?: number;
+  usage_source?: 'provider' | 'estimated' | 'unavailable';
+  estimated_cost_cny?: number | null;
   created_at?: string | null;
 }
 
@@ -138,6 +144,27 @@ export interface AdminMessageFeedback extends MessageFeedback {
   reviewed_by?: string | null;
   review_note?: string | null;
   reviewed_at?: string | null;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  username: string;
+  role: 'user' | 'admin';
+  email_confirmed_at?: string | null;
+  last_sign_in_at?: string | null;
+  created_at?: string | null;
+}
+
+export interface AdminRoleAudit {
+  id: string;
+  target_user_id?: string | null;
+  actor_user_id?: string | null;
+  previous_role: 'user' | 'admin';
+  new_role: 'user' | 'admin';
+  source: 'bootstrap-script' | 'admin-api';
+  reason: string;
+  created_at?: string | null;
 }
 
 export interface EvaluationSuite {
@@ -165,6 +192,46 @@ export interface EvaluationRun {
   error_message?: string | null;
   started_at?: string | null;
   completed_at?: string | null;
+}
+
+export interface AiMetrics {
+  hours: number;
+  total_runs: number;
+  succeeded_count: number;
+  degraded_count: number;
+  failed_count: number;
+  failure_rate: number;
+  degraded_rate: number;
+  p95_latency_ms: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost_cny: number;
+  unknown_cost_runs: number;
+  usage_sources: Record<string, number>;
+  by_module: Array<{
+    module: string;
+    total_runs: number;
+    failed_count: number;
+    degraded_count: number;
+    p95_latency_ms: number;
+  }>;
+}
+
+export interface AiAlert {
+  id: string;
+  module: string;
+  alert_type: 'failure-rate' | 'degraded-rate' | 'p95-latency' | 'daily-volume';
+  severity: 'warning' | 'critical';
+  status: 'open' | 'acknowledged' | 'resolved';
+  title: string;
+  detail: string;
+  metric_value?: number | null;
+  threshold_value?: number | null;
+  occurrence_count: number;
+  first_seen_at?: string | null;
+  last_seen_at?: string | null;
+  acknowledged_at?: string | null;
+  acknowledged_by?: string | null;
 }
 
 export interface Conversation {
@@ -306,6 +373,42 @@ export interface CodeReproduction extends ArtifactVersionMetadata {
   generation_mode?: string;
 }
 
+export interface ExperimentRunOutputFile {
+  name: string;
+  relative_path?: string;
+  size_bytes?: number;
+  sha256?: string;
+  media_type?: string;
+}
+
+export type ExperimentRunStatus =
+  | 'planned'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled';
+
+export interface ExperimentRun {
+  id: string;
+  project_id?: string | null;
+  code_artifact_id: string;
+  result_artifact_id?: string | null;
+  execution_mode: 'manual-evidence';
+  status: ExperimentRunStatus;
+  commit_sha: string;
+  command: string;
+  environment: Record<string, unknown>;
+  notes?: string | null;
+  exit_code?: number | null;
+  stdout_excerpt?: string | null;
+  stderr_excerpt?: string | null;
+  output_files: ExperimentRunOutputFile[];
+  started_at?: string | null;
+  completed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
 // ==================== Result Analysis Types ====================
 export interface ChartData {
   type: 'bar' | 'line' | 'boxplot' | 'radar' | 'heatmap';
@@ -332,6 +435,8 @@ export interface ResultAnalysis extends ArtifactVersionMetadata {
   suggestions: string[];
   row_count?: number;
   generation_mode?: string;
+  experiment_run_id?: string | null;
+  code_artifact_id?: string | null;
 }
 
 // ==================== Research Project Types ====================

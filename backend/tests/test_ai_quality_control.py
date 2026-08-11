@@ -76,6 +76,13 @@ class AiQualityControlTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 409)
         database.assert_not_called()
 
+    def test_real_model_request_requires_explicit_confirmation(self):
+        request = EvaluationRunRequest(
+            suite_slug="xunfei-real-model-smoke",
+            mode="real-model",
+        )
+        self.assertFalse(request.confirm_external_calls)
+
     def test_admin_review_records_reviewer_and_status(self):
         query = MagicMock()
         query.select.return_value = query

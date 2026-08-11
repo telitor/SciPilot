@@ -10,6 +10,7 @@ from api.schemas import (
     CreateConversationRequest,
     CreateResearchProjectRequest,
     ProjectAssignmentRequest,
+    UpdateResearchProjectRequest,
 )
 
 
@@ -172,6 +173,24 @@ class ResearchProjectRouteTests(unittest.TestCase):
 
         self.assertFalse(advanced)
         database.assert_not_called()
+
+
+    def test_project_stage_cannot_be_manually_overwritten(self):
+        payload = UpdateResearchProjectRequest(current_stage="completed")
+        with patch.object(
+            routes,
+            "_require_project",
+            return_value={"id": str(PROJECT_ID), "status": "active"},
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                routes.update_project(
+                    str(PROJECT_ID),
+                    payload,
+                    user=SimpleNamespace(id="user-1"),
+                )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("自动推进", raised.exception.detail)
 
 
 if __name__ == "__main__":

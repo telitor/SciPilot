@@ -10,6 +10,23 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def password_must_contain_letters_and_numbers(cls, value: str) -> str:
+        if not any(char.isalpha() for char in value) or not any(
+            char.isdigit() for char in value
+        ):
+            raise ValueError("Password must contain at least one letter and one number")
+        return value
+
+
 class RegisterRequest(BaseModel):
     email: str
     password: str = Field(min_length=8, max_length=128)
@@ -168,6 +185,50 @@ class AdminFeedbackListResponse(BaseModel):
     total: int = Field(ge=0)
 
 
+class AdminUserResponse(BaseModel):
+    id: str
+    email: str
+    username: str
+    role: Literal["user", "admin"]
+    email_confirmed_at: Optional[str] = None
+    last_sign_in_at: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class AdminUserListResponse(BaseModel):
+    items: list[AdminUserResponse]
+    total: int = Field(ge=0)
+
+
+class AdminRoleChangeRequest(BaseModel):
+    role: Literal["user", "admin"]
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_role_change_reason(cls, value: str) -> str:
+        cleaned = value.strip()
+        if len(cleaned) < 3:
+            raise ValueError("角色变更原因至少需要 3 个字符")
+        return cleaned
+
+
+class AdminRoleAuditResponse(BaseModel):
+    id: str
+    target_user_id: Optional[str] = None
+    actor_user_id: Optional[str] = None
+    previous_role: Literal["user", "admin"]
+    new_role: Literal["user", "admin"]
+    source: Literal["bootstrap-script", "admin-api"]
+    reason: str
+    created_at: Optional[str] = None
+
+
+class AdminRoleAuditListResponse(BaseModel):
+    items: list[AdminRoleAuditResponse]
+    total: int = Field(ge=0)
+
+
 class EvaluationSuiteResponse(BaseModel):
     id: str
     slug: str
@@ -182,6 +243,7 @@ class EvaluationSuiteResponse(BaseModel):
 class EvaluationRunRequest(BaseModel):
     suite_slug: str = Field(default="rag-retrieval-baseline", min_length=1, max_length=100)
     mode: Literal["offline", "real-model"] = "offline"
+    confirm_external_calls: bool = False
 
 
 class EvaluationRunResponse(BaseModel):
@@ -202,6 +264,47 @@ class EvaluationRunResponse(BaseModel):
 
 class EvaluationRunListResponse(BaseModel):
     items: list[EvaluationRunResponse]
+    total: int = Field(ge=0)
+
+
+class AiMetricsResponse(BaseModel):
+    hours: int = Field(ge=1, le=720)
+    total_runs: int = Field(ge=0)
+    succeeded_count: int = Field(ge=0)
+    degraded_count: int = Field(ge=0)
+    failed_count: int = Field(ge=0)
+    failure_rate: float = Field(ge=0, le=1)
+    degraded_rate: float = Field(ge=0, le=1)
+    p95_latency_ms: int = Field(ge=0)
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    estimated_cost_cny: float
+    unknown_cost_runs: int = Field(ge=0)
+    usage_sources: dict[str, int] = Field(default_factory=dict)
+    by_module: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AiAlertResponse(BaseModel):
+    id: str
+    module: str
+    alert_type: Literal[
+        "failure-rate", "degraded-rate", "p95-latency", "daily-volume"
+    ]
+    severity: Literal["warning", "critical"]
+    status: Literal["open", "acknowledged", "resolved"]
+    title: str
+    detail: str
+    metric_value: Optional[float] = None
+    threshold_value: Optional[float] = None
+    occurrence_count: int = Field(ge=1)
+    first_seen_at: Optional[str] = None
+    last_seen_at: Optional[str] = None
+    acknowledged_at: Optional[str] = None
+    acknowledged_by: Optional[str] = None
+
+
+class AiAlertListResponse(BaseModel):
+    items: list[AiAlertResponse]
     total: int = Field(ge=0)
 
 
@@ -227,6 +330,66 @@ class RepoAnalysisRequest(BaseModel):
     repo_url: str = Field(min_length=8, max_length=2048)
     project_id: Optional[UUID] = None
     roadmap_id: Optional[str] = Field(default=None, max_length=100)
+
+
+class ExperimentRunOutputFile(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    relative_path: Optional[str] = Field(default=None, max_length=1024)
+    size_bytes: Optional[int] = Field(default=None, ge=0)
+    sha256: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-fA-F]{64}$",
+    )
+    media_type: Optional[str] = Field(default=None, max_length=200)
+
+
+class CreateExperimentRunRequest(BaseModel):
+    code_artifact_id: str = Field(min_length=1, max_length=100)
+    commit_sha: str = Field(pattern=r"^[0-9a-fA-F]{7,64}$")
+    command: str = Field(min_length=1, max_length=4000)
+    environment: dict[str, Any] = Field(default_factory=dict)
+    notes: Optional[str] = Field(default=None, max_length=4000)
+
+    @field_validator("command", "notes")
+    @classmethod
+    def normalize_experiment_run_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("运行命令和备注不能只包含空白字符")
+        return cleaned
+
+    @field_validator("environment")
+    @classmethod
+    def validate_experiment_environment(
+        cls, value: dict[str, Any]
+    ) -> dict[str, Any]:
+        if len(json.dumps(value, ensure_ascii=False)) > 20_000:
+            raise ValueError("环境快照不能超过 20000 个字符")
+        return value
+
+
+class UpdateExperimentRunRequest(BaseModel):
+    status: Literal["running", "succeeded", "failed", "cancelled"]
+    exit_code: Optional[int] = None
+    stdout_excerpt: Optional[str] = Field(default=None, max_length=50_000)
+    stderr_excerpt: Optional[str] = Field(default=None, max_length=50_000)
+    output_files: list[ExperimentRunOutputFile] = Field(
+        default_factory=list,
+        max_length=50,
+    )
+    notes: Optional[str] = Field(default=None, max_length=4000)
+
+    @model_validator(mode="after")
+    def validate_experiment_result(self):
+        if self.status == "succeeded" and self.exit_code != 0:
+            raise ValueError("成功运行的退出码必须为 0")
+        if self.status == "failed" and self.exit_code is None:
+            raise ValueError("失败运行必须记录退出码")
+        if self.status in {"running", "cancelled"} and self.exit_code is not None:
+            raise ValueError("运行中或已取消状态不能记录退出码")
+        return self
 
 
 class DiagnoseRequest(BaseModel):
@@ -522,6 +685,10 @@ class AiRunSummaryResponse(BaseModel):
     retrieval_count: int = Field(default=0, ge=0)
     latency_ms: int = Field(ge=0)
     model_latency_ms: Optional[int] = Field(default=None, ge=0)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    usage_source: Literal["provider", "estimated", "unavailable"] = "unavailable"
+    estimated_cost_cny: Optional[float] = Field(default=None, ge=0)
     created_at: Optional[str] = None
 
 
@@ -655,6 +822,31 @@ class CodeReproductionResponse(BaseModel):
     generation_mode: Optional[str] = None
 
 
+class ExperimentRunResponse(BaseModel):
+    id: str
+    project_id: Optional[str] = None
+    code_artifact_id: str
+    result_artifact_id: Optional[str] = None
+    execution_mode: Literal["manual-evidence"]
+    status: Literal["planned", "running", "succeeded", "failed", "cancelled"]
+    commit_sha: str
+    command: str
+    environment: dict[str, Any] = Field(default_factory=dict)
+    notes: Optional[str] = None
+    exit_code: Optional[int] = None
+    stdout_excerpt: Optional[str] = None
+    stderr_excerpt: Optional[str] = None
+    output_files: list[ExperimentRunOutputFile] = Field(default_factory=list)
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ExperimentRunListResponse(BaseModel):
+    items: list[ExperimentRunResponse]
+
+
 class ChartResponse(BaseModel):
     type: Literal["bar", "line", "boxplot", "radar", "heatmap"]
     title: str
@@ -689,3 +881,5 @@ class ResultAnalysisResponse(BaseModel):
     suggestions: list[str]
     row_count: Optional[int] = None
     generation_mode: Optional[str] = None
+    experiment_run_id: Optional[str] = None
+    code_artifact_id: Optional[str] = None

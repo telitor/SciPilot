@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -12,7 +13,11 @@ from api.routes import (
     router,
 )
 from services.research_job_service import run_research_job_worker
+from services.rate_limit_service import ApiRateLimitMiddleware
+from services.runtime_config_service import inspect_runtime_configuration
 from services.supabase_service import SupabaseConfigurationError
+
+logger = logging.getLogger(__name__)
 
 
 def _job_worker_enabled() -> bool:
@@ -26,6 +31,15 @@ def _job_worker_enabled() -> bool:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    config_report = inspect_runtime_configuration()
+    for warning in config_report.warnings:
+        logger.warning("Runtime configuration warning: %s", warning)
+    if config_report.errors:
+        joined = "; ".join(config_report.errors)
+        if os.getenv("SCIPILOT_ENV", "production").strip().lower() == "production":
+            raise RuntimeError(f"Unsafe runtime configuration: {joined}")
+        logger.warning("Runtime configuration is incomplete: %s", joined)
+
     stop_event = asyncio.Event()
     worker_task: asyncio.Task | None = None
     if _job_worker_enabled():
@@ -59,6 +73,7 @@ origins = [
     ).split(",")
     if item.strip()
 ]
+app.add_middleware(ApiRateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,

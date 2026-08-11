@@ -55,6 +55,7 @@ function ExperimentRoadmap() {
     isRunning: isJobRunning,
     track: trackJob,
     retry: retryJob,
+    cancel: cancelJob,
   } = useDurableResearchJob<ExperimentRoadmapData>({
     storageKey: jobStorageKey,
     jobType: 'experiment-roadmap',
@@ -221,9 +222,12 @@ function ExperimentRoadmap() {
           </button>
         </div>
         {isJobRunning && (
-          <p className="mt-3 text-sm text-sci-muted">
-            智能体正在后台规划，当前进度 {job?.progress ?? 0}%。刷新页面后任务会继续。
-          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-sci-muted">
+            <span>智能体正在后台规划，当前进度 {job?.progress ?? 0}%。刷新页面后任务会继续。</span>
+            <button type="button" onClick={() => void cancelJob()} className="sci-btn-secondary text-xs">
+              取消任务
+            </button>
+          </div>
         )}
         {job?.status === 'failed' && (
           <button type="button" onClick={() => void retryJob()} className="sci-btn-secondary mt-3">

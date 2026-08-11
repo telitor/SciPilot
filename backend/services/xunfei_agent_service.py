@@ -10,6 +10,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from dotenv import load_dotenv
 from websocket import WebSocketTimeoutException, create_connection
 
+from services.ai_metrics_service import build_usage_metadata
+
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 AGENT_CONFIG_PREFIXES = {
@@ -116,7 +118,29 @@ def call_xunfei_agent_with_config(
     api_key: str,
     api_secret: str,
     ws_url: str,
+    max_tokens: int | None = None,
 ) -> str:
+    result = call_xunfei_agent_with_config_metadata(
+        user_id=user_id,
+        user_message=user_message,
+        app_id=app_id,
+        api_key=api_key,
+        api_secret=api_secret,
+        ws_url=ws_url,
+        max_tokens=max_tokens,
+    )
+    return str(result["text"])
+
+
+def call_xunfei_agent_with_config_metadata(
+    user_id: str,
+    user_message: str,
+    app_id: str,
+    api_key: str,
+    api_secret: str,
+    ws_url: str,
+    max_tokens: int | None = None,
+) -> dict[str, object]:
     if not user_message or not user_message.strip():
         raise ValueError("user_message cannot be empty")
     if not all((app_id, api_key, api_secret, ws_url)):
@@ -133,7 +157,13 @@ def call_xunfei_agent_with_config(
                 "domain": os.getenv("XF_AGENT_DOMAIN", "generalv3"),
                 "temperature": float(os.getenv("XF_AGENT_TEMPERATURE", "0.5")),
                 "top_k": int(os.getenv("XF_AGENT_TOP_K", "4")),
-                "max_tokens": int(os.getenv("XF_AGENT_MAX_TOKENS", "2028")),
+                "max_tokens": max(
+                    1,
+                    min(
+                        int(max_tokens or os.getenv("XF_AGENT_MAX_TOKENS", "2028")),
+                        int(os.getenv("XF_AGENT_MAX_TOKENS", "2028")),
+                    ),
+                ),
             }
         },
         "payload": {
@@ -144,6 +174,7 @@ def call_xunfei_agent_with_config(
     }
 
     answer_parts: list[str] = []
+    provider_usage: object = None
     websocket = None
     try:
         websocket = create_connection(signed_url, timeout=30)
@@ -164,6 +195,9 @@ def call_xunfei_agent_with_config(
             choices = data.get("payload", {}).get("choices", {})
             for item in choices.get("text", []):
                 answer_parts.append(str(item.get("content") or ""))
+            usage = data.get("payload", {}).get("usage")
+            if isinstance(usage, dict):
+                provider_usage = usage.get("text") or usage
             if header.get("status") == 2 or choices.get("status") == 2:
                 break
     except WebSocketTimeoutException:
@@ -175,7 +209,15 @@ def call_xunfei_agent_with_config(
     reply = "".join(answer_parts).strip()
     if not reply:
         raise RuntimeError("Xunfei agent returned empty reply")
-    return reply
+    return {
+        "text": reply,
+        "usage": build_usage_metadata(
+            input_text=user_message,
+            output_text=reply,
+            provider_usage=provider_usage,
+            price_prefix="XUNFEI_AGENT",
+        ),
+    }
 
 
 def call_xunfei_agent_by_category(
@@ -185,6 +227,21 @@ def call_xunfei_agent_by_category(
     return call_xunfei_agent_with_config(
         user_id=user_id,
         user_message=user_message,
+        **config,
+    )
+
+
+def call_xunfei_agent_by_category_with_metadata(
+    user_id: str,
+    user_message: str,
+    agent_category: str,
+    max_tokens: int | None = None,
+) -> dict[str, object]:
+    config = get_xunfei_agent_config(agent_category)
+    return call_xunfei_agent_with_config_metadata(
+        user_id=user_id,
+        user_message=user_message,
+        max_tokens=max_tokens,
         **config,
     )
 

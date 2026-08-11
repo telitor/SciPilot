@@ -14,6 +14,7 @@ def service_with_rows(rows):
     query.insert.return_value = query
     query.update.return_value = query
     query.eq.return_value = query
+    query.in_.return_value = query
     query.limit.return_value = query
     query.order.return_value = query
     query.execute.return_value = SimpleNamespace(data=rows)
@@ -76,6 +77,36 @@ class ResearchJobServiceTests(unittest.TestCase):
         ):
             with self.assertRaises(HTTPException) as raised:
                 research_job_service.retry_owned_research_job("job-1", "user-1")
+
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_cancel_owned_job_is_scoped_and_terminal(self):
+        cancelled = {"id": "job-1", "user_id": "user-1", "status": "cancelled"}
+        service, query = service_with_rows([cancelled])
+        with (
+            patch.object(
+                research_job_service,
+                "get_owned_research_job",
+                return_value={"id": "job-1", "user_id": "user-1", "status": "running"},
+            ),
+            patch.object(research_job_service, "_database", return_value=service),
+        ):
+            result = research_job_service.cancel_owned_research_job("job-1", "user-1")
+
+        updates = query.update.call_args.args[0]
+        self.assertEqual(updates["status"], "cancelled")
+        self.assertIn(call("user_id", "user-1"), query.eq.call_args_list)
+        query.in_.assert_called_once_with("status", ["pending", "running"])
+        self.assertEqual(result["status"], "cancelled")
+
+    def test_cancel_rejects_completed_job(self):
+        with patch.object(
+            research_job_service,
+            "get_owned_research_job",
+            return_value={"id": "job-1", "status": "succeeded"},
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                research_job_service.cancel_owned_research_job("job-1", "user-1")
 
         self.assertEqual(raised.exception.status_code, 409)
 

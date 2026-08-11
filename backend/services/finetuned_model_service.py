@@ -12,6 +12,8 @@ from typing import Mapping, Sequence
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from services.ai_metrics_service import build_usage_metadata
+
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
@@ -100,14 +102,14 @@ def _bounded_messages(
     return system + selected
 
 
-def call_finetuned_model(
+def call_finetuned_model_with_metadata(
     *,
     system_prompt: str | None = None,
     user_message: str | None = None,
     messages: Sequence[Mapping[str, str]] | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
-) -> str:
+) -> dict[str, object]:
     """Call the OpenAI-compatible MaaS endpoint.
 
     ``SCIPILOT_LLM_RESOURCE_ID`` is optional because some published service
@@ -163,4 +165,33 @@ def call_finetuned_model(
     reply = _response_content(response.choices[0].message.content)
     if not reply:
         raise RuntimeError("Fine-tuned model returned empty reply")
-    return reply
+    input_text = "\n".join(item["content"] for item in request_messages)
+    return {
+        "text": reply,
+        "usage": build_usage_metadata(
+            input_text=input_text,
+            output_text=reply,
+            provider_usage=getattr(response, "usage", None),
+            price_prefix="SCIPILOT_LLM",
+        ),
+    }
+
+
+def call_finetuned_model(
+    *,
+    system_prompt: str | None = None,
+    user_message: str | None = None,
+    messages: Sequence[Mapping[str, str]] | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+) -> str:
+    """Compatibility wrapper returning only the generated text."""
+
+    result = call_finetuned_model_with_metadata(
+        system_prompt=system_prompt,
+        user_message=user_message,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    return str(result["text"])

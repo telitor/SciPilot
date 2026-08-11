@@ -145,7 +145,7 @@ function KnowledgeBase() {
           </div>
           <h1 className="text-3xl font-semibold tracking-tight text-sci-ink">星火论文知识库</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-sci-muted">
-            论文原文保存在项目中，检索与向量数据由讯飞星火知识库托管。浏览器只连接 SciPilot 后端，不接触任何平台密钥。
+            论文原文保存在项目中，检索仅覆盖当前账号已同步的论文，向量数据由讯飞星火知识库托管。浏览器只连接 SciPilot 后端，不接触任何平台密钥。
           </p>
         </div>
         <button type="button" onClick={() => void loadStatus()} disabled={loadingStatus} className="sci-btn-secondary self-start">
@@ -178,7 +178,7 @@ function KnowledgeBase() {
           {
             label: '论文文档',
             value: loadingStatus ? '—' : String(status?.document_count ?? 0),
-            note: '由 KnowledgeBase/Papers 构建',
+            note: '当前账号已同步论文',
             icon: FileText,
           },
           {
@@ -245,7 +245,7 @@ function KnowledgeBase() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="flex items-center gap-2 text-xs text-sci-muted">
               {status?.ready ? <CheckCircle2 size={14} className="text-sci-success" /> : <AlertCircle size={14} className="text-sci-warning" />}
-              {status?.ready ? '星火知识库在线，结果来自远端论文向量库' : '知识库尚未就绪，暂不能提交查询'}
+              {status?.ready ? '星火知识库在线，仅检索当前账号论文' : '当前账号还没有可检索的已向量化论文'}
             </p>
             <button type="submit" disabled={!query.trim() || running || !status?.ready} className="sci-btn-primary">
               {running ? <Loader2 size={16} className="animate-spin" /> : mode === 'answer' ? <Send size={16} /> : <Search size={16} />}
@@ -303,7 +303,7 @@ function KnowledgeBase() {
       {status?.files && status.files.length > 0 && (
         <section>
           <div className="mb-4 flex items-center justify-between gap-3">
-            <h2 className="sci-section-title">远端论文索引</h2>
+            <h2 className="sci-section-title">当前账号论文索引</h2>
             <span className="font-mono text-[11px] text-sci-muted">showing {Math.min(status.files.length, 12)}</span>
           </div>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">

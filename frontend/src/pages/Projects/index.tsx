@@ -244,14 +244,15 @@ function Projects() {
     }
   };
 
-  const handleStageChange = async (stage: ResearchProjectStage) => {
+  const handleCompleteProject = async () => {
     if (!detail) return;
     try {
-      const response = await projectAPI.updateProject(detail.id, { current_stage: stage });
+      const response = await projectAPI.completeProject(detail.id);
       setDetail({ ...detail, ...response.data });
       await loadProjects();
+      addNotification({ type: 'success', message: '科研项目已完成', duration: 3000 });
     } catch (error) {
-      addNotification({ type: 'error', message: getApiErrorMessage(error, '更新阶段失败'), duration: 5000 });
+      addNotification({ type: 'error', message: getApiErrorMessage(error, '完成项目失败'), duration: 5000 });
     }
   };
 
@@ -418,14 +419,7 @@ function Projects() {
                   <p className="text-xs text-sci-muted">当前项目</p>
                   <h2 className="text-xl font-semibold">{detail.name}</h2>
                 </div>
-                <select
-                  value={detail.current_stage}
-                  onChange={(event) => void handleStageChange(event.target.value as ResearchProjectStage)}
-                  className="sci-input sm:w-48"
-                  aria-label="项目当前阶段"
-                >
-                  {Object.entries(STAGE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
+                <span className="sci-badge-info">当前阶段：{STAGE_LABELS[detail.current_stage]}</span>
               </div>
 
               <div className="border-b border-sci-border pb-4">
@@ -474,8 +468,8 @@ function Projects() {
                     <button
                       type="button"
                       onClick={() => {
-                        if (window.confirm('确认当前科研流程已经完成？确认后仍可手动调整项目阶段。')) {
-                          void handleStageChange('completed');
+                        if (window.confirm('确认当前科研流程已经完成？完成后项目阶段将由系统锁定。')) {
+                          void handleCompleteProject();
                         }
                       }}
                       className="sci-btn-primary"

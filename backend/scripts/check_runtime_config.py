@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import socket
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -12,6 +13,10 @@ from dotenv import load_dotenv
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ENV_PATH = BACKEND_DIR / ".env"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from services.runtime_config_service import inspect_runtime_configuration
 
 
 def _is_set(*names: str) -> bool:
@@ -34,26 +39,19 @@ def main() -> int:
         and _is_set("LOCAL_DEMO_PASSWORD")
     )
 
-    missing: list[str] = []
-    if not local_demo:
-        if not _is_set("SUPABASE_URL"):
-            missing.append("SUPABASE_URL")
-        if not _is_set("SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY"):
-            missing.append("SUPABASE_PUBLISHABLE_KEY 或 SUPABASE_ANON_KEY")
-        if not _is_set("SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY"):
-            missing.append("SUPABASE_SECRET_KEY 或 SUPABASE_SERVICE_ROLE_KEY")
+    report = inspect_runtime_configuration()
+    for warning in report.warnings:
+        print(f"[WARN] {warning}")
 
     supabase_url = os.getenv("SUPABASE_URL", "").strip()
     supabase_host = ""
     if supabase_url:
         parsed = urlparse(supabase_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            missing.append("有效的 SUPABASE_URL")
-        else:
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
             supabase_host = parsed.hostname or ""
 
-    if missing:
-        print("[ERROR] 后端配置不完整：" + "，".join(missing))
+    if report.errors:
+        print("[ERROR] 后端配置不安全或不完整：" + "；".join(report.errors))
         print("请编辑 backend/.env，保存后重新运行启动器。")
         return 1
 

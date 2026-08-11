@@ -137,6 +137,34 @@ class FrontendBackendContractTests(unittest.TestCase):
         )
         self.assertIn("repo_id", result_schema.get("properties", {}))
         self.assertNotIn("repo_id", result_schema.get("required", []))
+        self.assertIn("experiment_run_id", result_schema.get("properties", {}))
+        self.assertNotIn("experiment_run_id", result_schema.get("required", []))
+
+    def test_experiment_run_evidence_workflow_is_published(self):
+        expected_operations = {
+            ("/experiment-runs", "post", "201"),
+            ("/experiment-runs", "get", "200"),
+            ("/experiment-runs/{run_id}", "get", "200"),
+            ("/experiment-runs/{run_id}", "patch", "200"),
+        }
+        for path, method, status in expected_operations:
+            with self.subTest(path=path, method=method):
+                self.assertIn(status, self.operation(path, method)["responses"])
+
+        create_schema = self.request_schema("/experiment-runs")
+        self.assertTrue(
+            {"code_artifact_id", "commit_sha", "command"}.issubset(
+                set(create_schema.get("required", []))
+            )
+        )
+        response_schema = self.response_schema(
+            "/experiment-runs/{run_id}",
+        )
+        self.assertTrue(
+            {"id", "code_artifact_id", "status", "commit_sha", "command"}.issubset(
+                set(response_schema.get("required", []))
+            )
+        )
 
     def test_p0_response_contracts_publish_frontend_required_fields(self):
         expected_required = {
@@ -285,6 +313,7 @@ class FrontendBackendContractTests(unittest.TestCase):
         public_paths = {
             "/auth/login",
             "/auth/register",
+            "/auth/forgot-password",
             "/auth/logout",
             "/agents",
             "/resources",

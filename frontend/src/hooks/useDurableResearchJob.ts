@@ -48,6 +48,10 @@ export function useDurableResearchJob<T>({
             : nextJob.error_message || '任务执行失败，请稍后重试',
         );
       }
+      return;
+    }
+    if (nextJob.status === 'cancelled') {
+      localStorage.removeItem(storageKey);
     }
   }, [storageKey]);
 
@@ -119,6 +123,12 @@ export function useDurableResearchJob<T>({
     applyJob(response.data);
   }, [applyJob, job]);
 
+  const cancel = useCallback(async () => {
+    if (!job || (job.status !== 'pending' && job.status !== 'running')) return;
+    const response = await researchJobAPI.cancel(job.id);
+    applyJob(response.data);
+  }, [applyJob, job]);
+
   const clear = useCallback(() => {
     localStorage.removeItem(storageKey);
     notifiedFailureRef.current = null;
@@ -130,6 +140,7 @@ export function useDurableResearchJob<T>({
     isRunning: job?.status === 'pending' || job?.status === 'running',
     track,
     retry,
+    cancel,
     clear,
   };
 }

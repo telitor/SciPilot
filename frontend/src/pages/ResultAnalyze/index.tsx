@@ -29,9 +29,11 @@ function ResultAnalyze() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const linkedRepoId = searchParams.get('repoId');
+  const linkedRunId = searchParams.get('runId');
   const userId = useAuthStore((state) => state.user?.id || 'anonymous');
   const storageKey = `scipilot-current-result-analysis:${userId}${selectedProjectId ? `:${selectedProjectId}` : ''}`;
   const sourceStorageKey = `${storageKey}:repo-id`;
+  const runStorageKey = `${storageKey}:run-id`;
   const jobStorageKey = `${storageKey}:job-id`;
   const [file, setFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -50,10 +52,12 @@ function ResultAnalyze() {
       localStorage.setItem(storageKey, result.id);
       if (linkedRepoId) localStorage.setItem(sourceStorageKey, linkedRepoId);
       else localStorage.removeItem(sourceStorageKey);
+      if (linkedRunId) localStorage.setItem(runStorageKey, linkedRunId);
+      else localStorage.removeItem(runStorageKey);
     }
     setChartReady(true);
     addNotification({ type: 'success', message: '数据分析完成', duration: 3000 });
-  }, [addNotification, linkedRepoId, sourceStorageKey, storageKey]);
+  }, [addNotification, linkedRepoId, linkedRunId, runStorageKey, sourceStorageKey, storageKey]);
 
   const handleJobFailed = useCallback((message: string) => {
     addNotification({ type: 'error', message, duration: 5000 });
@@ -64,6 +68,7 @@ function ResultAnalyze() {
     isRunning: isJobRunning,
     track: trackJob,
     retry: retryJob,
+    cancel: cancelJob,
   } = useDurableResearchJob<ResultAnalysis>({
     storageKey: jobStorageKey,
     jobType: 'result-analysis',
@@ -83,15 +88,18 @@ function ResultAnalyze() {
     setAnalysis(null);
     const artifactId = localStorage.getItem(storageKey);
     const storedRepoId = localStorage.getItem(sourceStorageKey);
+    const storedRunId = localStorage.getItem(runStorageKey);
     if (linkedRepoId && storedRepoId !== linkedRepoId) return;
+    if (linkedRunId && storedRunId !== linkedRunId) return;
     if (!artifactId) return;
     resultAPI.getAnalysis(artifactId)
       .then((response) => setAnalysis(response.data))
       .catch(() => {
         localStorage.removeItem(storageKey);
         localStorage.removeItem(sourceStorageKey);
+        localStorage.removeItem(runStorageKey);
       });
-  }, [linkedRepoId, sourceStorageKey, storageKey]);
+  }, [linkedRepoId, linkedRunId, runStorageKey, sourceStorageKey, storageKey]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFile = e.target.files?.[0];
@@ -118,6 +126,7 @@ function ResultAnalyze() {
         undefined,
         selectedProjectId,
         linkedRepoId,
+        linkedRunId,
       );
       trackJob(response.data);
     } catch (error) {
@@ -162,6 +171,8 @@ function ResultAnalyze() {
           suggestions: draftAnalysis.suggestions.map((item) => item.trim()).filter(Boolean),
           row_count: draftAnalysis.row_count,
           generation_mode: draftAnalysis.generation_mode,
+          experiment_run_id: draftAnalysis.experiment_run_id,
+          code_artifact_id: draftAnalysis.code_artifact_id,
         },
         undefined,
         '人工修订结果分析结论',
@@ -288,6 +299,13 @@ function ResultAnalyze() {
       <h1 className="text-2xl font-bold">结果分析</h1>
       <ProjectContextBar />
 
+      {linkedRunId && (
+        <div className="flex items-center gap-2 rounded-lg border border-sci-success/30 bg-sci-success/10 px-4 py-3 text-sm text-sci-ink">
+          <FolderKanban size={16} className="text-sci-success" />
+          本次分析将关联实验运行 <span className="font-mono text-xs text-sci-accent">{linkedRunId.slice(0, 8)}</span>
+        </div>
+      )}
+
       {/* Upload */}
       <div className="sci-card-glow">
         <div className="flex items-center gap-4">
@@ -336,9 +354,12 @@ function ResultAnalyze() {
           </button>
         </div>
         {isJobRunning && (
-          <p className="mt-3 text-sm text-sci-muted">
-            智能体正在后台解释结果，当前进度 {job?.progress ?? 0}%。刷新页面后任务会继续。
-          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-sci-muted">
+            <span>智能体正在后台解释结果，当前进度 {job?.progress ?? 0}%。刷新页面后任务会继续。</span>
+            <button type="button" onClick={() => void cancelJob()} className="sci-btn-secondary text-xs">
+              取消任务
+            </button>
+          </div>
         )}
         {job?.status === 'failed' && (
           <button type="button" onClick={() => void retryJob()} className="sci-btn-secondary mt-3">

@@ -8,6 +8,10 @@ import type {
   AgentKnowledgeAnswerResponse,
   AgentKnowledgeAskRequest,
   AdminMessageFeedback,
+  AdminRoleAudit,
+  AdminUser,
+  AiAlert,
+  AiMetrics,
   DashboardChatResponse,
   DashboardChatStatus,
   KnowledgeBaseStatus,
@@ -23,10 +27,10 @@ import type {
   EvaluationRun,
   EvaluationSuite,
   CodeReproduction,
+  ExperimentRun,
   ResultAnalysis,
   ResearchProject,
   ResearchProjectDetail,
-  ResearchProjectStage,
   ProjectMemory,
   ProjectMemoryList,
   ProjectMemoryType,
@@ -47,7 +51,7 @@ const apiClient: AxiosInstance = axios.create({
 apiClient.interceptors.request.use(
   (config) => {
     const token = useAuthStore.getState().token;
-    if (token && config.headers) {
+    if (token && config.headers && !config.headers.Authorization) {
       config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
@@ -77,6 +81,16 @@ export const authAPI = {
 
   register: (email: string, password: string, username: string) =>
     apiClient.post('/auth/register', { email, password, username }),
+
+  forgotPassword: (email: string) =>
+    apiClient.post<{ message: string }>('/auth/forgot-password', { email }),
+
+  resetPassword: (password: string, recoveryToken: string) =>
+    apiClient.post<{ message: string }>(
+      '/auth/reset-password',
+      { password },
+      { headers: { Authorization: `Bearer ${recoveryToken}` } },
+    ),
 
   getMe: () => apiClient.get('/users/me'),
 
@@ -169,6 +183,8 @@ export const researchJobAPI = {
     apiClient.get<{ items: ResearchJob[] }>('/jobs', { params }),
 
   retry: (jobId: string) => apiClient.post<ResearchJob>(`/jobs/${jobId}/retry`),
+
+  cancel: (jobId: string) => apiClient.post<ResearchJob>(`/jobs/${jobId}/cancel`),
 };
 
 // ---- Versioned research artifacts ----
@@ -250,6 +266,40 @@ export const codeAPI = {
     ),
 };
 
+// ---- Experiment Run Evidence ----
+export const experimentRunAPI = {
+  create: (data: {
+    code_artifact_id: string;
+    commit_sha: string;
+    command: string;
+    environment?: Record<string, unknown>;
+    notes?: string;
+  }) => apiClient.post<ExperimentRun>('/experiment-runs', data),
+
+  list: (params?: { code_artifact_id?: string; project_id?: string; limit?: number }) =>
+    apiClient.get<{ items: ExperimentRun[] }>('/experiment-runs', { params }),
+
+  get: (runId: string) => apiClient.get<ExperimentRun>(`/experiment-runs/${runId}`),
+
+  update: (
+    runId: string,
+    data: {
+      status: 'running' | 'succeeded' | 'failed' | 'cancelled';
+      exit_code?: number;
+      stdout_excerpt?: string;
+      stderr_excerpt?: string;
+      output_files?: Array<{
+        name: string;
+        relative_path?: string;
+        size_bytes?: number;
+        sha256?: string;
+        media_type?: string;
+      }>;
+      notes?: string;
+    },
+  ) => apiClient.patch<ExperimentRun>(`/experiment-runs/${runId}`, data),
+};
+
 // ---- Result Analysis ----
 export const resultAPI = {
   analyze: (
@@ -257,12 +307,14 @@ export const resultAPI = {
     config?: Record<string, unknown>,
     projectId?: string | null,
     repoId?: string | null,
+    experimentRunId?: string | null,
   ) => {
     const formData = new FormData();
     formData.append('file', file);
     if (config) formData.append('config', JSON.stringify(config));
     if (projectId) formData.append('project_id', projectId);
     if (repoId) formData.append('repo_id', repoId);
+    if (experimentRunId) formData.append('experiment_run_id', experimentRunId);
     return apiClient.post<ResultAnalysis>('/results/analyze', formData, { timeout: 150000 });
   },
 
@@ -271,12 +323,14 @@ export const resultAPI = {
     config?: Record<string, unknown>,
     projectId?: string | null,
     repoId?: string | null,
+    experimentRunId?: string | null,
   ) => {
     const formData = new FormData();
     formData.append('file', file);
     if (config) formData.append('config', JSON.stringify(config));
     if (projectId) formData.append('project_id', projectId);
     if (repoId) formData.append('repo_id', repoId);
+    if (experimentRunId) formData.append('experiment_run_id', experimentRunId);
     return apiClient.post<ResearchJob>('/results/analyze-async', formData, { timeout: 60000 });
   },
 
@@ -336,7 +390,7 @@ export const projectAPI = {
       params: { include_archived: includeArchived },
     }),
 
-  createProject: (data: { name: string; objective?: string; current_stage?: ResearchProjectStage }) =>
+  createProject: (data: { name: string; objective?: string }) =>
     apiClient.post<ResearchProject>('/projects', data),
 
   getProject: (id: string) =>
@@ -344,8 +398,11 @@ export const projectAPI = {
 
   updateProject: (
     id: string,
-    data: Partial<Pick<ResearchProject, 'name' | 'objective' | 'status' | 'current_stage'>>,
+    data: Partial<Pick<ResearchProject, 'name' | 'objective' | 'status'>>,
   ) => apiClient.patch<ResearchProject>(`/projects/${id}`, data),
+
+  completeProject: (id: string) =>
+    apiClient.post<ResearchProject>(`/projects/${id}/complete`),
 
   archiveProject: (id: string) =>
     apiClient.post<ResearchProject>(`/projects/${id}/archive`),
@@ -465,6 +522,39 @@ export const adminQualityAPI = {
       suite_slug: suiteSlug,
       mode: 'offline',
     }),
+
+  runRealEvaluation: (suiteSlug: string) =>
+    apiClient.post<EvaluationRun>('/admin/evaluations/runs', {
+      suite_slug: suiteSlug,
+      mode: 'real-model',
+      confirm_external_calls: true,
+    }, {
+      timeout: 900000,
+    }),
+
+  getAiMetrics: (hours = 24) =>
+    apiClient.get<AiMetrics>('/admin/ai-metrics', { params: { hours } }),
+
+  getAiAlerts: (status: 'open' | 'acknowledged' | 'all' = 'open') =>
+    apiClient.get<{ items: AiAlert[]; total: number }>('/admin/ai-alerts', {
+      params: { status },
+    }),
+
+  acknowledgeAiAlert: (alertId: string) =>
+    apiClient.patch<AiAlert>(`/admin/ai-alerts/${alertId}/acknowledge`),
+};
+
+export const adminAccountAPI = {
+  getUsers: () =>
+    apiClient.get<{ items: AdminUser[]; total: number }>('/admin/users'),
+
+  updateRole: (
+    userId: string,
+    data: { role: 'user' | 'admin'; reason: string },
+  ) => apiClient.patch<AdminUser>(`/admin/users/${userId}/role`, data),
+
+  getRoleAudits: () =>
+    apiClient.get<{ items: AdminRoleAudit[]; total: number }>('/admin/role-audits'),
 };
 
 // ==================== Mock Data Helpers ====================

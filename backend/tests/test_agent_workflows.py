@@ -71,22 +71,20 @@ class AgentWorkflowTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 409)
         update_task.assert_not_called()
 
-    def test_ready_task_is_started_only_after_user_action(self):
+    def test_opening_ready_task_does_not_claim_execution_before_job_exists(self):
         ready = task(1, "ready")
-        started = {**ready, "status": "in_progress"}
         with (
             patch.object(routes, "_require_project"),
             patch.object(routes, "_workflow_for_project", return_value=self.workflow),
             patch.object(
                 routes,
                 "_sync_project_workflow",
-                side_effect=[(self.workflow, [ready]), (self.workflow, [started])],
+                side_effect=[(self.workflow, [ready]), (self.workflow, [ready])],
             ),
             patch.object(routes, "_require_workflow_task", return_value=ready),
             patch.object(
                 routes,
                 "_update_workflow_task",
-                return_value=started,
             ) as update_task,
         ):
             result = routes.start_project_workflow_task(
@@ -95,8 +93,8 @@ class AgentWorkflowTests(unittest.TestCase):
                 user=SimpleNamespace(id="user-1"),
             )
 
-        self.assertEqual(result["tasks"][0]["status"], "in_progress")
-        self.assertEqual(update_task.call_args.args[2]["status"], "in_progress")
+        self.assertEqual(result["tasks"][0]["status"], "ready")
+        update_task.assert_not_called()
 
     def test_confirmed_output_completes_node_and_unlocks_only_next_node(self):
         tasks = [

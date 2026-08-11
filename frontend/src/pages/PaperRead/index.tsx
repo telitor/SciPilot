@@ -158,6 +158,7 @@ function PaperRead() {
   const [jobError, setJobError] = useState<string | null>(null);
   const [jobPollKey, setJobPollKey] = useState(0);
   const [isRetryingAnalysis, setIsRetryingAnalysis] = useState(false);
+  const [isCancellingAnalysis, setIsCancellingAnalysis] = useState(false);
   const [isUploading, setIsUploading] = useState(
     () => Boolean(localStorage.getItem(paperJobStorageKey))
   );
@@ -298,10 +299,12 @@ function PaperRead() {
         }
 
         if (job.status === 'failed' || job.status === 'cancelled') {
-          const message = job.error_message || '论文分析失败，请稍后重试';
+          const message = job.status === 'cancelled'
+            ? '论文分析已取消'
+            : job.error_message || '论文分析失败，请稍后重试';
           setJobError(message);
           setIsUploading(false);
-          addNotification({ type: 'error', message, duration: 5000 });
+          addNotification({ type: job.status === 'cancelled' ? 'warning' : 'error', message, duration: 5000 });
           return;
         }
 
@@ -512,6 +515,27 @@ function PaperRead() {
     }
   }, [activeJobId, addNotification, isRetryingAnalysis]);
 
+  const cancelPaperAnalysis = useCallback(async () => {
+    if (!activeJobId || isCancellingAnalysis) return;
+    setIsCancellingAnalysis(true);
+    try {
+      await researchJobAPI.cancel(activeJobId);
+      localStorage.removeItem(paperJobStorageKey);
+      setActiveJobId(null);
+      setIsUploading(false);
+      setJobError('论文分析已取消');
+      addNotification({ type: 'warning', message: '论文分析已取消', duration: 3000 });
+    } catch (error: unknown) {
+      addNotification({
+        type: 'error',
+        message: getApiErrorMessage(error, '取消论文分析失败，请稍后重试'),
+        duration: 5000,
+      });
+    } finally {
+      setIsCancellingAnalysis(false);
+    }
+  }, [activeJobId, addNotification, isCancellingAnalysis, paperJobStorageKey]);
+
   const resetPaper = useCallback(() => {
     localStorage.removeItem(paperStorageKey);
     localStorage.removeItem(paperJobStorageKey);
@@ -702,6 +726,16 @@ function PaperRead() {
               </>
             )}
           </button>
+          {isUploading && activeJobId && (
+            <button
+              type="button"
+              onClick={() => void cancelPaperAnalysis()}
+              disabled={isCancellingAnalysis}
+              className="sci-btn-secondary ml-3"
+            >
+              {isCancellingAnalysis ? '正在取消…' : '取消任务'}
+            </button>
+          )}
           {jobError && (
             <div className="mt-4">
               <p className="text-sm text-red-400">{jobError}</p>

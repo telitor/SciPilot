@@ -86,7 +86,11 @@ class ConversationRouteTests(unittest.TestCase):
             patch.object(routes, "_paper_context_for_conversation", return_value=""),
             patch.object(routes, "_project_context_summary", return_value="项目已有问题树"),
             patch.object(routes, "_paper_knowledge_evidence", return_value=[]),
-            patch.object(routes, "generate_reply", return_value="回答") as generate,
+            patch.object(
+                routes,
+                "generate_reply_with_metadata",
+                return_value={"text": "回答", "usage": {}},
+            ) as generate,
         ):
             result = routes._professional_agent_answer(
                 agent=agent,

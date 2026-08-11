@@ -4,6 +4,8 @@ import AppLayout from '@/app/layout';
 import Home from '@/pages/Home';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
+import ForgotPassword from '@/pages/ForgotPassword';
+import ResetPassword from '@/pages/ResetPassword';
 import Dashboard from '@/pages/Dashboard';
 import PaperRead from '@/pages/PaperRead';
 import PaperLibrary from '@/pages/PaperLibrary';
@@ -16,6 +18,7 @@ import KnowledgeGraph from '@/pages/KnowledgeGraph';
 import Profile from '@/pages/Profile';
 import Projects from '@/pages/Projects';
 import NotificationContainer from '@/components/NotificationContainer';
+import AuthBootstrap from '@/components/AuthBootstrap';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -24,11 +27,13 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 function App() {
   return (
-    <>
+    <AuthBootstrap>
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
         <Route element={<AppLayout />}>
           <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
           <Route path="/projects" element={<RequireAuth><Projects /></RequireAuth>} />
@@ -45,7 +50,7 @@ function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <NotificationContainer />
-    </>
+    </AuthBootstrap>
   );
 }
 

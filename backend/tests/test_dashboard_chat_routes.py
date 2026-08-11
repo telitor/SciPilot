@@ -27,6 +27,11 @@ class DashboardChatRouteTests(unittest.TestCase):
                 "latency_ms": 10,
             },
         ).start()
+        self.owned_files = patch.object(
+            routes,
+            "_owned_vectored_file_ids",
+            return_value=["owned-file"],
+        ).start()
         self.addCleanup(patch.stopall)
         self.citations = [
             {
@@ -67,8 +72,8 @@ class DashboardChatRouteTests(unittest.TestCase):
             ),
             patch.object(
                 routes,
-                "call_finetuned_model",
-                return_value="下一步回答 [1]",
+                "call_finetuned_model_with_metadata",
+                return_value={"text": "下一步回答 [1]", "usage": {}},
             ) as model,
             patch.object(
                 routes,
@@ -105,7 +110,7 @@ class DashboardChatRouteTests(unittest.TestCase):
             ),
             patch.object(
                 routes,
-                "call_finetuned_model",
+                "call_finetuned_model_with_metadata",
                 side_effect=RuntimeError("secret upstream body"),
             ),
             self.assertRaises(HTTPException) as raised,
@@ -133,8 +138,8 @@ class DashboardChatRouteTests(unittest.TestCase):
             ),
             patch.object(
                 routes,
-                "call_finetuned_model",
-                return_value="纯模型回答",
+                "call_finetuned_model_with_metadata",
+                return_value={"text": "纯模型回答", "usage": {}},
             ) as model,
             patch.object(
                 routes,
@@ -161,7 +166,11 @@ class DashboardChatRouteTests(unittest.TestCase):
                 "model_service_status",
                 return_value={"available": True, "model": "model-1"},
             ),
-            patch.object(routes, "call_finetuned_model", return_value="回答正文"),
+            patch.object(
+                routes,
+                "call_finetuned_model_with_metadata",
+                return_value={"text": "回答正文", "usage": {}},
+            ),
             patch.object(
                 routes,
                 "_persist_dashboard_exchange",
@@ -205,7 +214,11 @@ class DashboardChatRouteTests(unittest.TestCase):
                 "model_service_status",
                 return_value={"available": True, "model": "model-1"},
             ),
-            patch.object(routes, "call_finetuned_model", return_value="新回答") as model,
+            patch.object(
+                routes,
+                "call_finetuned_model_with_metadata",
+                return_value={"text": "新回答", "usage": {}},
+            ) as model,
             patch.object(
                 routes,
                 "_persist_dashboard_exchange",
