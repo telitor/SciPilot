@@ -1,5 +1,4 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { isAxiosError } from 'axios';
 import { useNavigate } from 'react-router-dom';
 import {
   Upload,
@@ -8,7 +7,6 @@ import {
   BookOpen,
   Quote,
   Loader2,
-  X,
   RefreshCw,
   MessageSquarePlus,
   Trash2,
@@ -27,104 +25,23 @@ import {
   researchJobAPI,
 } from '@/services/api';
 import { getApiErrorMessage } from '@/services/errors';
+import { CitationCard, MarkdownContent } from '@/features/paper-read/PaperReadContent';
+import {
+  isPaperRequestTimeout,
+  knowledgeSyncLabel,
+  normalizeChatCitations,
+  normalizeConversationMessages,
+  type PaperChatMessage,
+} from '@/features/paper-read/paperReadUtils';
 import type {
   Citation,
   Conversation,
   PaperKnowledgeSync,
-  PaperKnowledgeSyncStatus,
 } from '@/types';
 
-interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  citations?: Citation[];
-}
+type ChatMessage = PaperChatMessage;
 
 const PAPER_READY_MESSAGE = '论文已解析完成，你可以询问研究背景、核心方法、实验结果、创新点和不足。';
-
-function isTimeoutError(error: unknown) {
-  return isAxiosError(error) && (
-    error.code === 'ECONNABORTED' || error.message.toLowerCase().includes('timeout')
-  );
-}
-
-function normalizeChatCitations(value: unknown): Citation[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!item || typeof item !== 'object') return [];
-    const citation = item as Record<string, unknown>;
-    const text = String(citation.excerpt || citation.content || '').trim();
-    if (!text) return [];
-    return [{
-      source: String(citation.title || citation.file_name || citation.document_id || '当前论文'),
-      text,
-    }];
-  });
-}
-
-function normalizeConversationMessages(value: unknown): ChatMessage[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!item || typeof item !== 'object') return [];
-    const message = item as Record<string, unknown>;
-    const role = message.role;
-    const content = typeof message.content === 'string' ? message.content.trim() : '';
-    if ((role !== 'user' && role !== 'assistant') || !content) return [];
-    return [{
-      id: String(message.id || `${Date.now()}-${Math.random()}`),
-      role,
-      content,
-      citations: normalizeChatCitations(message.citations),
-    }];
-  });
-}
-
-function knowledgeSyncLabel(status: PaperKnowledgeSyncStatus) {
-  const labels: Record<PaperKnowledgeSyncStatus, string> = {
-    not_configured: '知识库未配置',
-    unavailable: '知识库待迁移',
-    not_started: '等待知识库同步',
-    pending: '正在提交知识库',
-    uploaded: '等待向量化',
-    processing: '正在向量化',
-    vectored: '知识库已就绪',
-    failed: '知识库同步失败',
-  };
-  return labels[status];
-}
-
-// Simple Markdown renderer component
-function MarkdownContent({ content }: { content: string }) {
-  return (
-    <div className="sci-markdown">
-      {content.split('\n').map((line, i) => {
-        if (line.startsWith('# ')) return <h1 key={i}>{line.slice(2)}</h1>;
-        if (line.startsWith('## ')) return <h2 key={i}>{line.slice(3)}</h2>;
-        if (line.startsWith('### ')) return <h3 key={i}>{line.slice(4)}</h3>;
-        if (line.startsWith('- ')) return <ul key={i}><li>{line.slice(2)}</li></ul>;
-        if (line.startsWith('> ')) return <blockquote key={i}>{line.slice(2)}</blockquote>;
-        if (line.match(/^\d+\. /)) return <ol key={i}><li>{line.replace(/^\d+\. /, '')}</li></ol>;
-        if (line.trim() === '') return <div key={i} className="h-2" />;
-        return <p key={i}>{line}</p>;
-      })}
-    </div>
-  );
-}
-
-function CitationCard({ citation, onClose }: { citation: Citation; onClose: () => void }) {
-  return (
-    <div className="fixed z-50 bg-sci-bg2 border border-sci-accent/30 rounded-xl p-4 shadow-xl max-w-sm animate-fade-in" style={{ bottom: '20px', right: '20px' }}>
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-xs text-sci-accent font-medium">引用来源</span>
-        <button onClick={onClose} className="text-sci-muted hover:text-sci-ink"><X size={14} /></button>
-      </div>
-      <p className="text-sm text-sci-muted">{citation.source}</p>
-      <p className="text-sm text-sci-ink mt-2">{citation.text}</p>
-      {citation.page && <p className="text-xs text-sci-muted mt-2">第 {citation.page} 页</p>}
-    </div>
-  );
-}
 
 function PaperRead() {
   const navigate = useNavigate();
@@ -485,7 +402,7 @@ function PaperRead() {
       setJobProgress(response.data.progress || 0);
       addNotification({ type: 'success', message: '论文已上传，正在后台解析', duration: 3000 });
     } catch (error: unknown) {
-      const message = isTimeoutError(error)
+      const message = isPaperRequestTimeout(error)
         ? '论文上传超时，请检查网络后重试。'
         : getApiErrorMessage(error, '论文上传失败，请检查后端是否启动或 PDF 是否可读取');
       setJobError(message);
@@ -671,7 +588,7 @@ function PaperRead() {
       ]);
       void loadPaperConversations();
     } catch (error: unknown) {
-      const message = isTimeoutError(error)
+      const message = isPaperRequestTimeout(error)
         ? '智能体响应超时，请稍后重试。首次调用可能需要 1—2 分钟。'
         : getApiErrorMessage(error, '智能体调用失败，请检查后端或 Agent 配置。');
       addNotification({ type: 'error', message, duration: 5000 });

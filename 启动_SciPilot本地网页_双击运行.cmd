@@ -6,6 +6,7 @@ set "PROJECT_ROOT=%~dp0"
 set "BACKEND_DIR=%PROJECT_ROOT%backend"
 set "FRONTEND_DIST=%PROJECT_ROOT%frontend\dist"
 set "SERVER_SCRIPT=%PROJECT_ROOT%frontend\提供_SciPilot前端静态网页服务.py"
+set "SCIPILOT_VENV_PYTHON=%BACKEND_DIR%\.venv-scipilot\Scripts\python.exe"
 set "VENV_PYTHON=%BACKEND_DIR%\.venv\Scripts\python.exe"
 set "PYTHON_EXE="
 
@@ -21,13 +22,25 @@ if not exist "%BACKEND_DIR%\.env" (
   exit /b 1
 )
 
-if exist "%VENV_PYTHON%" (
+if exist "%SCIPILOT_VENV_PYTHON%" (
+  "%SCIPILOT_VENV_PYTHON%" --version >nul 2>nul
+  if not errorlevel 1 set "PYTHON_EXE=%SCIPILOT_VENV_PYTHON%"
+)
+
+if not defined PYTHON_EXE if exist "%VENV_PYTHON%" (
+  "%VENV_PYTHON%" --version >nul 2>nul
+  if not errorlevel 1 (
   set "PYTHON_EXE=%VENV_PYTHON%"
-) else (
+  ) else (
+    echo [警告] backend\.venv 存在但不可用，将尝试系统 Python。
+  )
+)
+
+if not defined PYTHON_EXE (
   where python >nul 2>nul
   if errorlevel 1 (
-    echo [错误] 没有找到 backend\.venv 或系统 Python。
-    echo 请先按 README 安装 Python 3.10+ 和 backend\requirements.txt。
+    echo [错误] 没有找到可用的 SciPilot Python 环境。
+    echo 请先运行：powershell -ExecutionPolicy Bypass -File backend\scripts\setup_dev.ps1
     pause
     exit /b 1
   )
@@ -37,7 +50,7 @@ if exist "%VENV_PYTHON%" (
 "%PYTHON_EXE%" -c "import fastapi, uvicorn, supabase, openai" >nul 2>nul
 if errorlevel 1 (
   echo [错误] 当前 Python 缺少后端依赖。请先运行：
-  echo   python -m pip install -r backend\requirements.txt
+  echo   powershell -ExecutionPolicy Bypass -File backend\scripts\setup_dev.ps1
   pause
   exit /b 1
 )

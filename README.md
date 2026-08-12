@@ -302,6 +302,20 @@ flowchart TB
 
 ## Launch SciPilot
 
+### Reproducible local environment
+
+SciPilot targets Python 3.11. On Windows, create a project-specific environment
+without relying on an existing Anaconda installation:
+
+```powershell
+Set-Location D:\SciCopilot\SciCopilot
+powershell -NoProfile -ExecutionPolicy Bypass -File backend\scripts\setup_dev.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File backend\scripts\verify_dev_environment.ps1
+```
+
+The setup creates `backend/.venv-scipilot`. The desktop launcher verifies that
+the interpreter can actually start before using it and skips stale environments.
+
 ### Backend
 
 ```powershell
@@ -394,6 +408,7 @@ Set-Location ..\frontend
 npm run type-check
 npm run lint
 npm run build
+npm run test:e2e
 ```
 
 </details>

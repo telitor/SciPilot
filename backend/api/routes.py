@@ -44,6 +44,10 @@ from api.dependencies import (
     record_activity,
     require_owned_row,
 )
+from api.normalization import (
+    normalized_string_list as _string_list,
+    parse_agent_json_object as _parse_agent_json_object,
+)
 from api.schemas import (
     AdminFeedbackListResponse,
     AdminFeedbackResponse,
@@ -490,23 +494,6 @@ def _normalize_agent_report(
         "authors": authors or fallback_authors or ["Unknown"],
         "sections": sections,
     }
-
-
-def _parse_agent_json_object(raw_text: str) -> dict[str, Any] | None:
-    cleaned = raw_text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, count=1, flags=re.I)
-    if cleaned.endswith("```"):
-        cleaned = cleaned[:-3].strip()
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    json_text = cleaned[start : end + 1] if start >= 0 and end > start else cleaned
-
-    try:
-        data = json.loads(json_text)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return None
-    return data if isinstance(data, dict) else None
 
 
 def _paper_analysis_prompt(extracted_text: str, fallback_title: str) -> str:
@@ -5368,19 +5355,6 @@ def dashboard_chat(
 # ---------------------------------------------------------------------------
 # Research artifacts, public catalog, knowledge graph, dashboard
 # ---------------------------------------------------------------------------
-
-
-def _string_list(value: Any, *, limit: int = 10) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    items: list[str] = []
-    for item in value:
-        text = str(item or "").strip()
-        if text and text not in items:
-            items.append(text[:300])
-        if len(items) >= limit:
-            break
-    return items
 
 
 def _normalize_research_node(value: Any, *, depth: int = 0) -> dict[str, Any] | None:

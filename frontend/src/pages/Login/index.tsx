@@ -67,8 +67,9 @@ function Login() {
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="block text-sm font-medium text-sci-ink mb-2">邮箱</label>
+              <label htmlFor="login-email" className="block text-sm font-medium text-sci-ink mb-2">邮箱</label>
               <input
+                id="login-email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -80,9 +81,10 @@ function Login() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-sci-ink mb-2">密码</label>
+              <label htmlFor="login-password" className="block text-sm font-medium text-sci-ink mb-2">密码</label>
               <div className="relative">
                 <input
+                  id="login-password"
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -95,6 +97,7 @@ function Login() {
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-sci-muted hover:text-sci-ink"
+                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
                 >
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>

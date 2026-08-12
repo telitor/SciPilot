@@ -15,8 +15,10 @@ __pycache__/
 *.pyd
 .Python
 .venv/
+.venv-*/
 venv/
 backend/.venv/
+backend/.venv-*/
 .pytest_cache/
 
 # FastAPI / logs
@@ -28,6 +30,8 @@ frontend/node_modules/
 .pnpm-store/
 dist/
 frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
 build/
 target/
 out/
