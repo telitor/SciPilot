@@ -332,7 +332,7 @@ class RepoAnalysisRequest(BaseModel):
     roadmap_id: Optional[str] = Field(default=None, max_length=100)
 
 
-class ExperimentRunOutputFile(BaseModel):
+class ExperimentRunEvidenceFile(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     relative_path: Optional[str] = Field(default=None, max_length=1024)
     size_bytes: Optional[int] = Field(default=None, ge=0)
@@ -343,8 +343,22 @@ class ExperimentRunOutputFile(BaseModel):
     media_type: Optional[str] = Field(default=None, max_length=200)
 
 
+class ExperimentRunOutputFile(ExperimentRunEvidenceFile):
+    id: Optional[str] = None
+    analyzable: bool = False
+    stored: bool = False
+
+
+class AnalyzeExperimentResultFileRequest(BaseModel):
+    experiment_run_id: str = Field(min_length=1, max_length=100)
+    result_file_id: str = Field(min_length=1, max_length=100)
+
+
 class CreateExperimentRunRequest(BaseModel):
     code_artifact_id: str = Field(min_length=1, max_length=100)
+    execution_mode: Literal["manual-evidence", "sandboxed-docker"] = (
+        "manual-evidence"
+    )
     commit_sha: str = Field(pattern=r"^[0-9a-fA-F]{7,64}$")
     command: str = Field(min_length=1, max_length=4000)
     environment: dict[str, Any] = Field(default_factory=dict)
@@ -375,7 +389,7 @@ class UpdateExperimentRunRequest(BaseModel):
     exit_code: Optional[int] = None
     stdout_excerpt: Optional[str] = Field(default=None, max_length=50_000)
     stderr_excerpt: Optional[str] = Field(default=None, max_length=50_000)
-    output_files: list[ExperimentRunOutputFile] = Field(
+    output_files: list[ExperimentRunEvidenceFile] = Field(
         default_factory=list,
         max_length=50,
     )
@@ -580,10 +594,11 @@ ResearchJobStatus = Literal[
 
 
 class PaperUploadJobResponse(BaseModel):
-    job_id: str
+    job_id: Optional[str]
     paper_id: str
     status: ResearchJobStatus
     progress: int = Field(ge=0, le=100)
+    reused: bool = False
 
 
 class ResearchJobResponse(BaseModel):
@@ -696,6 +711,7 @@ class ChatResponse(BaseModel):
     reply: str
     message: dict[str, Any]
     citations: list[dict[str, Any]]
+    citation_validation: dict[str, Any] = Field(default_factory=dict)
     knowledge_used: bool
     model: Optional[str] = None
     agent: ChatAgentResponse
@@ -705,6 +721,7 @@ class ChatResponse(BaseModel):
 class DashboardChatResponse(BaseModel):
     reply: str
     citations: list[dict[str, Any]] = Field(default_factory=list)
+    citation_validation: dict[str, Any] = Field(default_factory=dict)
     model: Optional[str] = None
     knowledge_used: bool
     knowledge_unavailable: bool = False
@@ -827,7 +844,8 @@ class ExperimentRunResponse(BaseModel):
     project_id: Optional[str] = None
     code_artifact_id: str
     result_artifact_id: Optional[str] = None
-    execution_mode: Literal["manual-evidence"]
+    execution_mode: Literal["manual-evidence", "sandboxed-docker"]
+    execution_job_id: Optional[str] = None
     status: Literal["planned", "running", "succeeded", "failed", "cancelled"]
     commit_sha: str
     command: str
@@ -839,6 +857,7 @@ class ExperimentRunResponse(BaseModel):
     output_files: list[ExperimentRunOutputFile] = Field(default_factory=list)
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
+    approved_at: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -862,6 +881,9 @@ class StatsSummaryResponse(BaseModel):
     max: float
     ci95: tuple[float, float]
     count: Optional[int] = None
+    missing_count: int = Field(default=0, ge=0)
+    invalid_count: int = Field(default=0, ge=0)
+    ci_method: Literal["student-t"] = "student-t"
     p_value: Optional[float] = None
 
 
@@ -882,4 +904,5 @@ class ResultAnalysisResponse(BaseModel):
     row_count: Optional[int] = None
     generation_mode: Optional[str] = None
     experiment_run_id: Optional[str] = None
+    result_file_id: Optional[str] = None
     code_artifact_id: Optional[str] = None

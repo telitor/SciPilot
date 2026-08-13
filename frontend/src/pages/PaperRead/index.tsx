@@ -393,7 +393,30 @@ function PaperRead() {
     let queued = false;
     try {
       const response = await paperAPI.uploadAsync(file, setUploadProgress, selectedProjectId);
-      const jobId = String(response.data.job_id);
+      if (response.data.reused) {
+        const paperId = String(response.data.paper_id || '');
+        if (!paperId) throw new Error('后端没有返回可复用的论文编号');
+        const [paperResponse, reportResponse] = await Promise.all([
+          paperAPI.getPaper(paperId),
+          paperAPI.getDeepRead(paperId),
+        ]);
+        queued = true;
+        setCurrentPaper(paperResponse.data);
+        setCurrentReport(reportResponse.data);
+        localStorage.setItem(paperStorageKey, paperId);
+        localStorage.removeItem(paperJobStorageKey);
+        setActiveJobId(null);
+        setUploadProgress(100);
+        setJobProgress(100);
+        setJobError(null);
+        setIsUploading(false);
+        setChatMessages([
+          { id: `${Date.now()}-ready`, role: 'assistant', content: PAPER_READY_MESSAGE },
+        ]);
+        addNotification({ type: 'success', message: '已复用该论文的现有精读报告', duration: 3500 });
+        return;
+      }
+      const jobId = typeof response.data.job_id === 'string' ? response.data.job_id : '';
       if (!jobId) throw new Error('后端没有返回论文分析任务编号');
       queued = true;
       localStorage.setItem(paperJobStorageKey, jobId);

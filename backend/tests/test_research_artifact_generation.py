@@ -17,6 +17,26 @@ class StructuredAgentResultTests(unittest.TestCase):
 
         self.assertEqual(result["steps"][0]["task"], "验证")
 
+    def test_parse_agent_json_object_preserves_sections_when_graph_is_truncated(self):
+        raw = """```json
+{
+  "title": "Attention Is All You Need",
+  "authors": "Unknown",
+  "sections": [
+    {"title": "核心方法", "content": "Transformer", "page": 2}
+  ],
+  "graph": {
+    "entities": [{"id": "paper", "label": "Transformer"}],
+    "relations": [{
+```"""
+
+        result = routes._parse_agent_json_object(raw)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["title"], "Attention Is All You Need")
+        self.assertEqual(result["sections"][0]["page"], 2)
+        self.assertNotIn("graph", result)
+
     def test_normalize_research_tree_rejects_unstructured_reply(self):
         with self.assertRaises(HTTPException) as raised:
             routes._normalize_research_tree("普通文本", "研究方向")

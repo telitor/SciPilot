@@ -17,16 +17,26 @@ import type { KGEdge, KGNode, KnowledgeGraph as KnowledgeGraphData } from '@/typ
 const categoryColors: Record<string, string> = {
   concept: '#38bdf8',
   technique: '#8b5cf6',
+  method: '#8b5cf6',
   dataset: '#10b981',
+  metric: '#14b8a6',
   paper: '#f59e0b',
+  author: '#ec4899',
+  finding: '#eab308',
+  section: '#64748b',
   tool: '#ef4444',
 };
 
 const categoryLabels: Record<string, string> = {
   concept: '概念',
   technique: '技术',
+  method: '方法',
   dataset: '数据集',
+  metric: '指标',
   paper: '论文',
+  author: '作者',
+  finding: '结论',
+  section: '报告章节',
   tool: '工具',
 };
 
@@ -235,7 +245,7 @@ function KnowledgeGraphCanvas({
             <Share2 size={32} className="mx-auto mb-3 text-sci-border" />
             <p className="font-medium">暂无可显示的知识节点</p>
             <p className="mt-1 text-sm text-sci-muted">
-              可清除搜索条件，或先导入并整理知识库资料。
+              可清除搜索条件，或先上传并完成一篇论文精读。
             </p>
           </div>
         </div>
@@ -281,6 +291,20 @@ function KnowledgeGraphCanvas({
             <span className="font-semibold">{hoveredNode.label}</span>
           </div>
           <p className="text-sm text-sci-muted">{hoveredNode.description || '暂无节点说明'}</p>
+          {hoveredNode.evidence && (
+            <div className="mt-3 border-t border-sci-border pt-3 text-xs text-sci-muted">
+              <p>
+                来源：{hoveredNode.evidence.section_heading || '论文精读报告'}
+                {hoveredNode.evidence.citation ? ` · ${hoveredNode.evidence.citation}` : ''}
+                {hoveredNode.evidence.page_start
+                  ? ` · 第 ${hoveredNode.evidence.page_start}${hoveredNode.evidence.page_end && hoveredNode.evidence.page_end !== hoveredNode.evidence.page_start ? `–${hoveredNode.evidence.page_end}` : ''} 页`
+                  : ''}
+              </p>
+              {hoveredNode.evidence.excerpt && (
+                <p className="mt-1 line-clamp-3">{hoveredNode.evidence.excerpt}</p>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -293,6 +317,7 @@ function KnowledgeGraph() {
   const [visibleGraph, setVisibleGraph] = useState<KnowledgeGraphData>({ nodes: [], edges: [] });
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState('');
   const [hasSearched, setHasSearched] = useState(false);
 
@@ -358,6 +383,20 @@ function KnowledgeGraph() {
     [fullGraph.nodes]
   );
 
+  const rebuildGraph = async () => {
+    if (rebuilding) return;
+    setRebuilding(true);
+    setError('');
+    try {
+      await kgAPI.rebuild();
+      await loadGraph();
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setRebuilding(false);
+    }
+  };
+
   const relationCounts = useMemo(() => {
     const counts = new Map<string, number>();
     fullGraph.edges.forEach((edge: KGEdge) => {
@@ -374,11 +413,11 @@ function KnowledgeGraph() {
         <div>
           <h1 className="text-2xl font-bold">知识图谱</h1>
           <p className="mt-1 text-sm text-sci-muted">
-            展示科研概念、论文、技术、数据集与工具之间的结构化关系。
+            自动沉淀论文、作者、方法、数据集、指标与研究结论之间的结构化关系。
           </p>
         </div>
-        <form onSubmit={handleSearch} className="flex w-full gap-2 lg:w-auto">
-          <div className="relative flex-1 lg:w-72">
+        <form onSubmit={handleSearch} className="flex w-full flex-wrap gap-2 lg:w-auto lg:flex-nowrap">
+          <div className="relative min-w-52 flex-1 lg:w-72">
             <Search
               size={16}
               className="absolute left-3 top-1/2 -translate-y-1/2 text-sci-muted"
@@ -407,6 +446,16 @@ function KnowledgeGraph() {
             title="清除搜索"
           >
             重置
+          </button>
+          <button
+            type="button"
+            onClick={() => void rebuildGraph()}
+            className="sci-btn-secondary"
+            disabled={rebuilding}
+            title="从已有论文精读报告同步图谱"
+          >
+            {rebuilding ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+            同步论文图谱
           </button>
         </form>
       </div>

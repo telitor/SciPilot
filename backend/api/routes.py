@@ -21,7 +21,6 @@ import requests
 from pydantic import ValidationError
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -55,6 +54,7 @@ from api.schemas import (
     AdminRoleChangeRequest,
     AdminUserListResponse,
     AdminUserResponse,
+    AnalyzeExperimentResultFileRequest,
     AiAlertListResponse,
     AiAlertResponse,
     AiMetricsResponse,
@@ -113,6 +113,13 @@ from services.finetuned_model_service import (
 )
 from services.evaluation_service import evaluate_rag_retrieval_cases
 from services.llm_service import generate_reply, generate_reply_with_metadata
+from services.pdf_extraction_service import PdfExtractionError, extract_pdf
+from services.knowledge_graph_service import (
+    KnowledgeGraphUnavailable,
+    normalize_paper_graph,
+    sync_paper_knowledge_graph,
+)
+from services.rag_grounding_service import validate_citation_grounding
 from services.research_job_service import (
     PermanentResearchJobError,
     cancel_owned_research_job,
@@ -122,6 +129,14 @@ from services.research_job_service import (
     list_owned_research_jobs,
     retry_owned_research_job,
     update_research_job_progress,
+)
+from services.sandbox_execution_service import (
+    CapturedResultFile,
+    SandboxCommandError,
+    SandboxConfigurationError,
+    docker_execution_enabled,
+    execute_repository_run,
+    parse_approved_command,
 )
 from services.supabase_service import get_supabase_auth_client
 from services.xunfei_knowledge_base_service import (
@@ -356,6 +371,42 @@ def _validate_pdf_content(filename: str, content: bytes) -> None:
         raise HTTPException(status_code=415, detail="文件不是有效的 PDF")
 
 
+def _find_reusable_completed_paper(
+    *,
+    user_id: str,
+    project_id: str | None,
+    checksum_sha256: str,
+) -> dict[str, Any] | None:
+    query = (
+        database()
+        .table("papers")
+        .select(PAPER_COLUMNS)
+        .eq("user_id", user_id)
+        .eq("checksum_sha256", checksum_sha256)
+        .eq("status", "completed")
+    )
+    query = (
+        query.eq("project_id", project_id)
+        if project_id
+        else query.is_("project_id", "null")
+    )
+    paper = _first(query.order("updated_at", desc=True).limit(1).execute())
+    if not paper:
+        return None
+    report = _first(
+        database()
+        .table("paper_reports")
+        .select("id")
+        .eq("paper_id", paper["id"])
+        .eq("user_id", user_id)
+        .eq("report_type", "deep-read")
+        .eq("status", "completed")
+        .limit(1)
+        .execute()
+    )
+    return paper if report else None
+
+
 def _auth_error() -> HTTPException:
     return HTTPException(status_code=401, detail="邮箱或密码不正确")
 
@@ -384,55 +435,44 @@ def _supabase_auth_exception(exc: Exception) -> HTTPException:
 
 
 def _extract_pdf_metadata(content: bytes, fallback_title: str) -> dict[str, Any]:
-    try:
-        from pypdf import PdfReader
+    return extract_pdf(content, f"{fallback_title}.pdf", max_pages=5, max_chars=10_000)
 
-        reader = PdfReader(BytesIO(content))
-        metadata = reader.metadata or {}
-        title = str(getattr(metadata, "title", "") or fallback_title).strip()
-        author_text = str(getattr(metadata, "author", "") or "").strip()
-        authors = [part.strip() for part in re.split(r"[,;]", author_text) if part.strip()]
-        text_parts: list[str] = []
-        for page in reader.pages[:5]:
-            page_text = page.extract_text() or ""
-            if page_text.strip():
-                text_parts.append(page_text.strip())
-            if sum(map(len, text_parts)) >= 10_000:
-                break
-        text = "\n\n".join(text_parts)[:10_000]
-        return {
-            "title": title or fallback_title,
-            "authors": authors or ["Unknown"],
-            "text": text,
-            "page_count": len(reader.pages),
-        }
-    except Exception:
-        return {
-            "title": fallback_title,
-            "authors": ["Unknown"],
-            "text": "",
-            "page_count": None,
-        }
+
+def _positive_page(value: Any) -> int | None:
+    try:
+        page = int(value)
+    except (TypeError, ValueError):
+        return None
+    return page if page > 0 else None
 
 
 def _normalize_agent_report(
     raw_text: str,
     fallback_title: str,
     fallback_authors: list[str],
+    valid_pages: set[int] | None = None,
 ) -> dict[str, Any]:
     data = _parse_agent_json_object(raw_text)
 
     if not isinstance(data, dict):
+        fallback_sections = [
+            {
+                "heading": "论文精读结果",
+                "content": raw_text.strip() or "论文精读 Agent 未返回有效内容。",
+                "citations": [],
+            }
+        ]
         return {
             "title": fallback_title,
             "authors": fallback_authors or ["Unknown"],
-            "sections": [
-                {
-                    "heading": "论文精读结果",
-                    "content": raw_text.strip() or "论文精读 Agent 未返回有效内容。",
-                    "citations": [],
-                }
-            ],
+            "sections": fallback_sections,
+            "graph": normalize_paper_graph(
+                None,
+                title=fallback_title,
+                authors=fallback_authors or ["Unknown"],
+                sections=fallback_sections,
+                valid_pages=valid_pages,
+            ),
         }
 
     raw_authors = data.get("authors")
@@ -457,14 +497,20 @@ def _normalize_agent_report(
             if not content:
                 continue
             citation = str(section.get("citation") or "").strip()
+            citation_page = _positive_page(
+                section.get("page") or section.get("page_start")
+            )
+            if valid_pages is not None and citation_page not in valid_pages:
+                citation_page = None
             citations = (
                 [
                     {
                         "source": str(data.get("title") or fallback_title),
                         "text": citation,
+                        **({"page": citation_page} if citation_page else {}),
                     }
                 ]
-                if citation
+                if citation or citation_page
                 else []
             )
             sections.append(
@@ -489,30 +535,75 @@ def _normalize_agent_report(
             }
         ]
 
+    normalized_title = str(data.get("title") or fallback_title).strip() or fallback_title
+    normalized_authors = authors or fallback_authors or ["Unknown"]
     return {
-        "title": str(data.get("title") or fallback_title).strip() or fallback_title,
-        "authors": authors or fallback_authors or ["Unknown"],
+        "title": normalized_title,
+        "authors": normalized_authors,
         "sections": sections,
+        "graph": normalize_paper_graph(
+            data.get("graph"),
+            title=normalized_title,
+            authors=normalized_authors,
+            sections=sections,
+            valid_pages=valid_pages,
+        ),
     }
 
 
 def _paper_analysis_prompt(extracted_text: str, fallback_title: str) -> str:
     return f"""请精读下面的论文文本，并生成简洁的结构化报告。
 你必须只返回合法 JSON，不要使用 Markdown 代码块，不要添加额外解释文字。
-每个章节内容控制在 500 字以内。JSON 格式必须为：
+每个章节内容控制在 500 字以内。请在同一次返回中提取精简知识图谱，
+实体最多 12 个、关系最多 20 条；实体 id 只在本次 JSON 内使用。
+JSON 格式必须为：
 {{
   "title": "论文标题，无法识别时使用 {fallback_title}",
   "authors": "作者信息，无法识别时使用 Unknown",
   "sections": [
-    {{"title": "研究背景与动机", "content": "分析内容", "citation": "[1]"}},
-    {{"title": "核心方法", "content": "分析内容", "citation": "[2]"}},
-    {{"title": "实验结果", "content": "分析内容", "citation": "[3]"}},
-    {{"title": "关键结论", "content": "分析内容", "citation": "[4]"}}
-  ]
+    {{"title": "研究背景与动机", "content": "分析内容", "citation": "原文证据摘要", "page": 1}},
+    {{"title": "核心方法", "content": "分析内容", "citation": "原文证据摘要", "page": 2}},
+    {{"title": "实验结果", "content": "分析内容", "citation": "原文证据摘要", "page": 4}},
+    {{"title": "关键结论", "content": "分析内容", "citation": "原文证据摘要", "page": 5}}
+  ],
+  "graph": {{
+    "entities": [
+      {{"id": "method-1", "label": "方法名称", "category": "method", "description": "简述", "citation": "原文证据摘要", "page": 2, "evidence": "对应原文或报告证据"}}
+    ],
+    "relations": [
+      {{"source": "paper", "target": "method-1", "relation": "uses", "strength": 0.9, "citation": "原文证据摘要", "page": 2, "evidence": "关系证据"}}
+    ]
+  }}
 }}
+
+graph 中预留 id "paper" 表示当前论文。category 只能使用 author、method、dataset、metric、concept、finding。
+page 必须使用论文文本中“第 N 页”的真实页码；无法定位时省略 page，不要猜测。
 
 论文文本：
 {extracted_text[:10_000]}"""
+
+
+def _sync_paper_report_graph(
+    *,
+    paper_id: str,
+    user_id: str,
+    project_id: str | None,
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        return sync_paper_knowledge_graph(
+            database(),
+            user_id=user_id,
+            paper_id=paper_id,
+            project_id=project_id,
+            graph=report["graph"],
+        )
+    except KnowledgeGraphUnavailable as exc:
+        logger.info("Paper graph is waiting for migration paper=%s", paper_id)
+        return {"status": "unavailable", "warning": str(exc)}
+    except Exception:
+        logger.exception("Unable to persist paper knowledge graph paper=%s", paper_id)
+        return {"status": "failed", "warning": "论文图谱构建失败，可稍后重新生成"}
 
 
 def _save_artifact(
@@ -1011,12 +1102,40 @@ def _prepare_paper_knowledge_sync(
     return _public_knowledge_sync(mapping), mapping
 
 
+def _enqueue_paper_knowledge_sync_job(
+    *,
+    paper: dict[str, Any],
+    user_id: str,
+) -> dict[str, Any] | None:
+    if not is_xunfei_knowledge_base_configured():
+        return None
+    input_data = {
+        "paper_id": str(paper["id"]),
+        "checksum_sha256": str(paper.get("checksum_sha256") or ""),
+    }
+    job, _ = create_or_reuse_research_job(
+        user_id=user_id,
+        job_type="paper-knowledge-sync",
+        input_data={
+            **input_data,
+            "idempotency_key": _research_job_fingerprint(
+                "paper-knowledge-sync", input_data
+            ),
+        },
+        idempotency_key=_research_job_fingerprint("paper-knowledge-sync", input_data),
+        project_id=(str(paper["project_id"]) if paper.get("project_id") else None),
+        paper_id=str(paper["id"]),
+    )
+    return job
+
+
 def _complete_paper_knowledge_sync(
     *,
     paper: dict[str, Any],
     content: bytes,
     user_id: str,
     mapping: dict[str, Any],
+    raise_on_failure: bool = False,
 ) -> dict[str, Any]:
 
     try:
@@ -1061,11 +1180,20 @@ def _complete_paper_knowledge_sync(
                 delete_xunfei_knowledge_file(uploaded_file_id)
             except Exception:
                 logger.warning("Unable to compensate an unmapped ChatDoc upload")
-        return _public_knowledge_sync(
+        result = _public_knowledge_sync(
             {**mapping, "status": "failed"},
             warning="知识库文件已处理，但同步映射保存失败，请稍后重试",
         )
-    return _public_knowledge_sync(_first(saved) or {**mapping, **updates})
+        if raise_on_failure:
+            raise HTTPException(status_code=502, detail=result["warning"])
+        return result
+    result = _public_knowledge_sync(_first(saved) or {**mapping, **updates})
+    if raise_on_failure and result.get("status") == "failed":
+        raise HTTPException(
+            status_code=502,
+            detail=str(result.get("error_message") or "星火知识库同步失败，请稍后重试"),
+        )
+    return result
 
 
 def _paper_knowledge_evidence(
@@ -1200,9 +1328,11 @@ def _agent_knowledge_answer(
         reply = _evidence_only_answer(citations)
         usage = {}
         response_mode = "xunfei-evidence-only"
+    citation_validation = validate_citation_grounding(reply, citations)
     return {
         "reply": reply,
         "citations": citations,
+        "citation_validation": citation_validation,
         "knowledge_used": bool(citations),
         "retrieval_mode": retrieval["rerank_mode"],
         "retrieval_queries": retrieval["retrieval_queries"],
@@ -1322,9 +1452,11 @@ def _professional_agent_answer(
     except Exception as exc:
         raise _agent_service_exception(category, exc) from None
 
+    citation_validation = validate_citation_grounding(reply, citations)
     return {
         "reply": reply,
         "citations": citations,
+        "citation_validation": citation_validation,
         "knowledge_used": bool(citations),
         "retrieval_mode": (
             "xunfei-file-vector-search"
@@ -1442,6 +1574,7 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
                     "candidate_count": answer.get("candidate_count", 0),
                     "retrieval_degraded": answer.get("retrieval_degraded", False),
                     "response_mode": answer["response_mode"],
+                    "citation_validation": answer.get("citation_validation", {}),
                 },
             }
         )
@@ -1462,7 +1595,11 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
     saved_message = _first(assistant)
     if not saved_message:
         raise HTTPException(status_code=500, detail="保存智能体回复失败")
-    degraded = bool(answer.get("retrieval_degraded")) or str(
+    citation_status = str(
+        (answer.get("citation_validation") or {}).get("status") or "not_applicable"
+    )
+    citation_failed = citation_status in {"invalid", "unsupported"}
+    degraded = bool(answer.get("retrieval_degraded")) or citation_failed or str(
         answer.get("response_mode") or ""
     ).endswith("evidence-only")
     run = _record_ai_run(
@@ -1480,7 +1617,9 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
             "retrieval-degraded"
             if answer.get("retrieval_degraded")
             else "evidence-only"
-            if degraded
+            if str(answer.get("response_mode") or "").endswith("evidence-only")
+            else "citation-validation-failed"
+            if citation_failed
             else None
         ),
         retrieval_count=len(answer.get("citations") or []),
@@ -1492,6 +1631,7 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
         "reply": answer["reply"],
         "message": saved_message,
         "citations": answer["citations"],
+        "citation_validation": answer.get("citation_validation", {}),
         "knowledge_used": answer["knowledge_used"],
         "model": answer["model"],
         "agent": {
@@ -3292,6 +3432,105 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
     """Process one claimed durable job. Called by the application worker."""
 
     job_type = str(job.get("job_type") or "")
+    if job_type == "experiment-execution":
+        return _process_experiment_execution_job(job)
+    if job_type == "paper-knowledge-sync":
+        job_id = str(job["id"])
+        user_id = str(job["user_id"])
+        paper_id = str(job.get("paper_id") or "")
+        if not paper_id:
+            raise PermanentResearchJobError("知识同步任务缺少 paper_id")
+        try:
+            paper = require_owned_row(
+                "papers",
+                paper_id,
+                user_id,
+                columns=(
+                    "id,user_id,file_path,file_name,mime_type,checksum_sha256,project_id"
+                ),
+            )
+        except HTTPException as exc:
+            raise PermanentResearchJobError("待同步论文不存在") from exc
+        file_path = str(paper.get("file_path") or "").strip()
+        if not file_path:
+            raise PermanentResearchJobError("论文没有可同步的 PDF 文件")
+        update_research_job_progress(job_id, 20)
+        try:
+            content = database().storage.from_("papers").download(file_path)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="读取论文文件失败，请稍后重试") from exc
+        if not isinstance(content, bytes) or not content:
+            raise HTTPException(status_code=502, detail="读取论文文件失败，请稍后重试")
+        available, mapping = _paper_knowledge_mapping(paper_id, user_id)
+        if mapping and mapping.get("status") == "vectored":
+            return {
+                "paper_id": paper_id,
+                "knowledge_sync": _public_knowledge_sync(mapping),
+            }
+        if not available or not mapping:
+            sync_state, mapping = _prepare_paper_knowledge_sync(
+                paper=paper,
+                user_id=user_id,
+            )
+        else:
+            sync_state = _public_knowledge_sync(mapping)
+        if not mapping:
+            if sync_state.get("status") == "not_configured":
+                raise PermanentResearchJobError("星火知识库尚未完成后端配置")
+            return {"paper_id": paper_id, "knowledge_sync": sync_state}
+        provider_file_id = str(mapping.get("provider_file_id") or "").strip()
+        if provider_file_id:
+            try:
+                refreshed = _refresh_paper_knowledge_mapping(mapping, user_id)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail="暂时无法刷新星火知识库状态，请稍后重试",
+                ) from exc
+            if refreshed.get("status") != "failed":
+                return {
+                    "paper_id": paper_id,
+                    "knowledge_sync": _public_knowledge_sync(refreshed),
+                }
+            try:
+                delete_xunfei_knowledge_file(provider_file_id)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail="清理失败的星火知识库文件失败，请稍后重试",
+                ) from exc
+            cleared = (
+                database()
+                .table("paper_knowledge_files")
+                .update(
+                    {
+                        "provider_file_id": None,
+                        "provider_sid": None,
+                        "status": "pending",
+                        "error_message": None,
+                    }
+                )
+                .eq("id", mapping["id"])
+                .eq("user_id", user_id)
+                .execute()
+            )
+            mapping = _first(cleared) or {
+                **mapping,
+                "provider_file_id": None,
+                "provider_sid": None,
+                "status": "pending",
+                "error_message": None,
+            }
+        update_research_job_progress(job_id, 50)
+        sync_state = _complete_paper_knowledge_sync(
+            paper=paper,
+            content=content,
+            user_id=user_id,
+            mapping=mapping,
+            raise_on_failure=True,
+        )
+        update_research_job_progress(job_id, 90)
+        return {"paper_id": paper_id, "knowledge_sync": sync_state}
     if job_type in {
         "research-decomposition",
         "experiment-roadmap",
@@ -3388,22 +3627,22 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
 
     fallback_title = Path(filename).stem
     logger.info("Starting durable PDF extraction job=%s paper=%s", job_id, paper_id)
-    extracted = _extract_pdf_metadata(content, fallback_title)
+    try:
+        extracted = _extract_pdf_metadata(content, fallback_title)
+    except PdfExtractionError as exc:
+        raise PermanentResearchJobError(str(exc)) from exc
     logger.info(
         "Durable PDF extraction completed job=%s text_length=%s",
         job_id,
         len(extracted["text"]),
     )
-    if not extracted["text"].strip():
-        raise PermanentResearchJobError("无法从 PDF 中提取文本，可能是扫描版 PDF。")
-
     update_research_job_progress(job_id, 35)
     paper_agent = _pick_agent("paper")
     logger.info("Calling paper-reading Agent for durable job=%s", job_id)
     try:
         raw_report = generate_reply(
             system_prompt=str(paper_agent.get("system_prompt") or ""),
-            user_message=_paper_analysis_prompt(extracted["text"], fallback_title),
+            user_message=_paper_analysis_prompt(extracted["prompt_text"], fallback_title),
             agent_category="paper-reading",
             user_id=user_id,
         )
@@ -3414,6 +3653,7 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
         raw_report,
         fallback_title=extracted["title"],
         fallback_authors=extracted["authors"],
+        valid_pages={int(page["page"]) for page in extracted["pages"]},
     )
     update_research_job_progress(job_id, 75)
     sections = parsed_report["sections"]
@@ -3428,7 +3668,10 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
                 "sections": sections,
                 "content": {
                     "page_count": extracted["page_count"],
+                    "extracted_page_count": extracted["extracted_page_count"],
+                    "extraction_warnings": extracted["extraction_warnings"],
                     "source": "xunfei-paper-reading-agent",
+                    "graph": parsed_report["graph"],
                 },
                 "model": "paper-reading",
                 "error_message": None,
@@ -3445,7 +3688,11 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
                     "abstract": extracted["text"][:1500] or None,
                     "status": "completed",
                     "error_message": None,
-                    "metadata": {"page_count": extracted["page_count"]},
+                    "metadata": {
+                        "page_count": extracted["page_count"],
+                        "extracted_page_count": extracted["extracted_page_count"],
+                        "extraction_warnings": extracted["extraction_warnings"],
+                    },
                 }
             )
             .eq("id", paper_id)
@@ -3461,6 +3708,12 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
         "authors": parsed_report["authors"],
         "status": "completed",
     }
+    graph_sync = _sync_paper_report_graph(
+        paper_id=paper_id,
+        user_id=user_id,
+        project_id=(str(paper["project_id"]) if paper.get("project_id") else None),
+        report=parsed_report,
+    )
     _advance_project_stage(paper.get("project_id"), user_id, "literature")
     update_research_job_progress(job_id, 90)
     knowledge_sync, sync_mapping = _prepare_paper_knowledge_sync(
@@ -3468,12 +3721,9 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
         user_id=user_id,
     )
     if sync_mapping:
-        knowledge_sync = _complete_paper_knowledge_sync(
-            paper=saved_paper,
-            content=content,
-            user_id=user_id,
-            mapping=sync_mapping,
-        )
+        sync_job = _enqueue_paper_knowledge_sync_job(paper=saved_paper, user_id=user_id)
+        if sync_job:
+            knowledge_sync = {**knowledge_sync, "job_id": str(sync_job["id"])}
     record_activity(
         user_id,
         "paper",
@@ -3489,12 +3739,74 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
         "paper_id": paper_id,
         "title": parsed_report["title"],
         "knowledge_sync": knowledge_sync,
+        "knowledge_graph": graph_sync,
     }
 
 
 def handle_terminal_research_job_failure(
     job: dict[str, Any], exc: Exception
 ) -> None:
+    if job.get("job_type") == "experiment-execution":
+        input_data = job.get("input")
+        run_id = (
+            str(input_data.get("experiment_run_id") or "")
+            if isinstance(input_data, dict)
+            else ""
+        )
+        if not run_id:
+            return
+        message = (
+            str(exc)[:1000]
+            if isinstance(exc, PermanentResearchJobError)
+            else "Docker 受控执行失败，请检查后端执行环境"
+        )
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            (
+                database()
+                .table("experiment_runs")
+                .update(
+                    {
+                        "status": "failed",
+                        "exit_code": 125,
+                        "stderr_excerpt": message,
+                        "started_at": now,
+                        "completed_at": now,
+                    }
+                )
+                .eq("id", run_id)
+                .eq("user_id", str(job["user_id"]))
+                .in_("status", ["planned", "running"])
+                .execute()
+            )
+        except Exception:
+            logger.warning(
+                "Unable to persist terminal experiment failure job=%s",
+                job.get("id"),
+            )
+        return
+    if job.get("job_type") == "paper-knowledge-sync" and job.get("paper_id"):
+        try:
+            (
+                database()
+                .table("paper_knowledge_files")
+                .update(
+                    {
+                        "status": "failed",
+                        "error_message": "星火知识库同步失败，已达到自动重试上限",
+                    }
+                )
+                .eq("paper_id", str(job["paper_id"]))
+                .eq("user_id", str(job["user_id"]))
+                .eq("provider", PAPER_KNOWLEDGE_PROVIDER)
+                .execute()
+            )
+        except Exception:
+            logger.warning(
+                "Unable to persist terminal knowledge sync failure job=%s",
+                job.get("id"),
+            )
+        return
     if job.get("job_type") != "paper-analysis" or not job.get("paper_id"):
         return
     message = _paper_job_error_message(exc)
@@ -3540,11 +3852,33 @@ async def upload_paper_async(
 
     user_id = str(user.id)
     project_id = _validated_project_id(project_id, user_id)
+    checksum = hashlib.sha256(content).hexdigest()
+    reusable_paper = _find_reusable_completed_paper(
+        user_id=user_id,
+        project_id=project_id,
+        checksum_sha256=checksum,
+    )
+    if reusable_paper:
+        record_activity(
+            user_id,
+            "paper",
+            "复用论文报告",
+            str(reusable_paper["title"]),
+            entity_type="paper",
+            entity_id=str(reusable_paper["id"]),
+            project_id=project_id,
+        )
+        return {
+            "job_id": None,
+            "paper_id": reusable_paper["id"],
+            "status": "succeeded",
+            "progress": 100,
+            "reused": True,
+        }
     paper_id = str(uuid.uuid4())
     safe_name = _safe_filename(filename)
     file_path = f"{user_id}/{paper_id}/{safe_name}"
     fallback_title = Path(filename).stem
-    checksum = hashlib.sha256(content).hexdigest()
     uploaded = False
     paper_created = False
 
@@ -3628,6 +3962,7 @@ async def upload_paper_async(
         "paper_id": paper_id,
         "status": job.get("status", "pending"),
         "progress": job.get("progress", 0),
+        "reused": False,
     }
 
 
@@ -3677,6 +4012,16 @@ def retry_research_job(job_id: str, user=Depends(get_current_user)):
             .eq("user_id", user_id)
             .execute()
         )
+    elif job.get("job_type") == "paper-knowledge-sync" and job.get("paper_id"):
+        (
+            database()
+            .table("paper_knowledge_files")
+            .update({"status": "pending", "error_message": None})
+            .eq("paper_id", str(job["paper_id"]))
+            .eq("user_id", user_id)
+            .eq("provider", PAPER_KNOWLEDGE_PROVIDER)
+            .execute()
+        )
     return _public_research_job(job)
 
 
@@ -3702,12 +4047,21 @@ def cancel_research_job(job_id: str, user=Depends(get_current_user)):
             .eq("user_id", user_id)
             .execute()
         )
+    elif job.get("job_type") == "paper-knowledge-sync" and job.get("paper_id"):
+        (
+            database()
+            .table("paper_knowledge_files")
+            .update({"status": "failed", "error_message": "知识库同步已由用户取消"})
+            .eq("paper_id", str(job["paper_id"]))
+            .eq("user_id", user_id)
+            .eq("provider", PAPER_KNOWLEDGE_PROVIDER)
+            .execute()
+        )
     return _public_research_job(job)
 
 
 @router.post("/papers/upload")
 async def upload_paper(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     project_id: str | None = Form(default=None),
     user=Depends(get_current_user),
@@ -3721,29 +4075,43 @@ async def upload_paper(
 
     user_id = str(user.id)
     project_id = _validated_project_id(project_id, user_id)
+    checksum = hashlib.sha256(content).hexdigest()
+    reusable_paper = _find_reusable_completed_paper(
+        user_id=user_id,
+        project_id=project_id,
+        checksum_sha256=checksum,
+    )
+    if reusable_paper:
+        record_activity(
+            user_id,
+            "paper",
+            "复用论文报告",
+            str(reusable_paper["title"]),
+            entity_type="paper",
+            entity_id=str(reusable_paper["id"]),
+            project_id=project_id,
+        )
+        return {**reusable_paper, "reused": True}
     paper_id = str(uuid.uuid4())
     safe_name = _safe_filename(filename)
     file_path = f"{user_id}/{paper_id}/{safe_name}"
     fallback_title = Path(filename).stem
     logger.info("Starting PDF extraction for paper=%s", paper_id)
-    extracted = _extract_pdf_metadata(content, fallback_title)
+    try:
+        extracted = _extract_pdf_metadata(content, fallback_title)
+    except PdfExtractionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     logger.info(
         "PDF extraction completed for paper=%s text_length=%s",
         paper_id,
         len(extracted["text"]),
     )
-    if not extracted["text"].strip():
-        raise HTTPException(
-            status_code=422,
-            detail="无法从 PDF 中提取文本，可能是扫描版 PDF。",
-        )
-
     paper_agent = _pick_agent("paper")
     logger.info("Calling paper-reading Agent for paper=%s", paper_id)
     try:
         raw_report = generate_reply(
             system_prompt=str(paper_agent.get("system_prompt") or ""),
-            user_message=_paper_analysis_prompt(extracted["text"], fallback_title),
+            user_message=_paper_analysis_prompt(extracted["prompt_text"], fallback_title),
             agent_category="paper-reading",
             user_id=user_id,
         )
@@ -3753,10 +4121,9 @@ async def upload_paper(
         raw_report,
         fallback_title=extracted["title"],
         fallback_authors=extracted["authors"],
+        valid_pages={int(page["page"]) for page in extracted["pages"]},
     )
     logger.info("Paper-reading Agent completed for paper=%s", paper_id)
-    checksum = hashlib.sha256(content).hexdigest()
-
     try:
         database().storage.from_("papers").upload(
             path=file_path,
@@ -3780,7 +4147,11 @@ async def upload_paper(
                     "checksum_sha256": checksum,
                     "status": "completed",
                     "project_id": project_id,
-                    "metadata": {"page_count": extracted["page_count"]},
+                    "metadata": {
+                        "page_count": extracted["page_count"],
+                        "extracted_page_count": extracted["extracted_page_count"],
+                        "extraction_warnings": extracted["extraction_warnings"],
+                    },
                 }
             )
             .execute()
@@ -3799,7 +4170,10 @@ async def upload_paper(
             "sections": sections,
             "content": {
                 "page_count": extracted["page_count"],
+                "extracted_page_count": extracted["extracted_page_count"],
+                "extraction_warnings": extracted["extraction_warnings"],
                 "source": "xunfei-paper-reading-agent",
+                "graph": parsed_report["graph"],
             },
             "model": "paper-reading",
         },
@@ -3809,18 +4183,20 @@ async def upload_paper(
     paper = _first(result)
     if not paper:
         paper = require_owned_row("papers", paper_id, user_id, columns=PAPER_COLUMNS)
+    graph_sync = _sync_paper_report_graph(
+        paper_id=paper_id,
+        user_id=user_id,
+        project_id=project_id,
+        report=parsed_report,
+    )
     knowledge_sync, sync_mapping = _prepare_paper_knowledge_sync(
         paper=paper,
         user_id=user_id,
     )
     if sync_mapping:
-        background_tasks.add_task(
-            _complete_paper_knowledge_sync,
-            paper=paper,
-            content=content,
-            user_id=user_id,
-            mapping=sync_mapping,
-        )
+        sync_job = _enqueue_paper_knowledge_sync_job(paper=paper, user_id=user_id)
+        if sync_job:
+            knowledge_sync = {**knowledge_sync, "job_id": str(sync_job["id"])}
     record_activity(
         user_id,
         "paper",
@@ -3830,7 +4206,11 @@ async def upload_paper(
         entity_id=paper_id,
         project_id=project_id,
     )
-    return {**paper, "knowledge_sync": knowledge_sync}
+    return {
+        **paper,
+        "knowledge_sync": knowledge_sync,
+        "knowledge_graph": graph_sync,
+    }
 
 
 @router.get("/papers")
@@ -3936,7 +4316,6 @@ def get_paper_knowledge_sync(paper_id: str, user=Depends(get_current_user)):
 @router.post("/papers/{paper_id}/knowledge-sync")
 def retry_paper_knowledge_sync(
     paper_id: str,
-    background_tasks: BackgroundTasks,
     user=Depends(get_current_user),
 ):
     user_id = str(user.id)
@@ -3966,25 +4345,14 @@ def retry_paper_knowledge_sync(
             )
     if not paper.get("file_path"):
         raise HTTPException(status_code=404, detail="该论文没有可重新同步的 PDF 文件")
-    try:
-        content = database().storage.from_("papers").download(paper["file_path"])
-    except Exception:
-        raise HTTPException(status_code=502, detail="读取论文文件失败，请稍后重试") from None
-    if not isinstance(content, bytes) or not content:
-        raise HTTPException(status_code=502, detail="读取论文文件失败，请稍后重试")
-
     result, sync_mapping = _prepare_paper_knowledge_sync(
         paper=paper,
         user_id=user_id,
     )
     if sync_mapping:
-        background_tasks.add_task(
-            _complete_paper_knowledge_sync,
-            paper=paper,
-            content=content,
-            user_id=user_id,
-            mapping=sync_mapping,
-        )
+        sync_job = _enqueue_paper_knowledge_sync_job(paper=paper, user_id=user_id)
+        if sync_job:
+            result = {**result, "job_id": str(sync_job["id"])}
     record_activity(
         user_id,
         "knowledge",
@@ -4083,6 +4451,7 @@ def ask_agent_with_knowledge(
     return {
         "reply": answer["reply"],
         "citations": answer["citations"],
+        "citation_validation": answer.get("citation_validation", {}),
         "knowledge_used": answer["knowledge_used"],
         "model": answer["model"],
         "agent": {
@@ -5078,7 +5447,7 @@ def answer_from_knowledge_base(
     status = model_service_status()
     model = status.get("model") if status.get("available") else None
     if citations and status.get("available"):
-        answer = _call_maas(
+        model_result = _call_maas(
             [{"role": "user", "content": query}],
             system_prompt=_knowledge_system_prompt(
                 "你是 SciPilot 科研知识问答助手，回答应准确、简洁并可核验。",
@@ -5086,8 +5455,10 @@ def answer_from_knowledge_base(
                 knowledge_requested=True,
             ),
         )
+        answer = str(model_result["text"])
     else:
         answer = _evidence_only_answer(citations)
+    citation_validation = validate_citation_grounding(answer, citations)
     record_activity(
         str(user.id),
         "knowledge",
@@ -5107,6 +5478,7 @@ def answer_from_knowledge_base(
         "query": query,
         "answer": answer,
         "citations": citations,
+        "citation_validation": citation_validation,
         "total": len(citations),
         "provider": "xunfei-chatdoc",
         "model": model,
@@ -5136,6 +5508,7 @@ def _persist_dashboard_exchange(
     citations: list[dict[str, Any]],
     model: str | None,
     knowledge_used: bool,
+    citation_validation: dict[str, Any],
 ) -> tuple[str | None, str | None, bool]:
     """Persist one completed exchange; local demo mode remains database-free."""
 
@@ -5193,6 +5566,7 @@ def _persist_dashboard_exchange(
                         "metadata": {
                             "knowledge_used": knowledge_used,
                             "response_mode": "dashboard-model-chat",
+                            "citation_validation": citation_validation,
                         },
                     },
                 ]
@@ -5303,6 +5677,7 @@ def dashboard_chat(
             model_latency_ms=elapsed_ms,
         )
         raise
+    citation_validation = validate_citation_grounding(reply, citations)
     conversation_id, message_id, persistence_unavailable = _persist_dashboard_exchange(
         user_id=str(user.id),
         conversation_id=payload.conversation_id,
@@ -5311,6 +5686,7 @@ def dashboard_chat(
         citations=citations,
         model=status.get("model"),
         knowledge_used=bool(citations),
+        citation_validation=citation_validation,
     )
     elapsed_ms = round((perf_counter() - started) * 1000)
     run = _record_ai_run(
@@ -5320,9 +5696,20 @@ def dashboard_chat(
         module="dashboard-chat",
         provider="xunfei-maas",
         model=str(status.get("model")) if status.get("model") else None,
-        status="degraded" if knowledge_unavailable else "succeeded",
+        status=(
+            "degraded"
+            if knowledge_unavailable
+            or citation_validation["status"] in {"invalid", "unsupported"}
+            else "succeeded"
+        ),
         response_mode="dashboard-model-chat",
-        fallback_reason="knowledge-unavailable" if knowledge_unavailable else None,
+        fallback_reason=(
+            "knowledge-unavailable"
+            if knowledge_unavailable
+            else "citation-validation-failed"
+            if citation_validation["status"] in {"invalid", "unsupported"}
+            else None
+        ),
         retrieval_count=len(citations),
         latency_ms=elapsed_ms,
         model_latency_ms=elapsed_ms,
@@ -5342,6 +5729,7 @@ def dashboard_chat(
     return {
         "reply": reply,
         "citations": citations,
+        "citation_validation": citation_validation,
         "model": status.get("model"),
         "knowledge_used": bool(citations),
         "knowledge_unavailable": knowledge_unavailable,
@@ -6244,6 +6632,7 @@ def _experiment_run_response(row: dict[str, Any]) -> dict[str, Any]:
         "code_artifact_id": str(row["code_artifact_id"]),
         "result_artifact_id": row.get("result_artifact_id"),
         "execution_mode": str(row.get("execution_mode") or "manual-evidence"),
+        "execution_job_id": row.get("execution_job_id"),
         "status": str(row.get("status") or "planned"),
         "commit_sha": str(row.get("commit_sha") or ""),
         "command": str(row.get("command") or ""),
@@ -6255,6 +6644,7 @@ def _experiment_run_response(row: dict[str, Any]) -> dict[str, Any]:
         "output_files": output_files if isinstance(output_files, list) else [],
         "started_at": row.get("started_at"),
         "completed_at": row.get("completed_at"),
+        "approved_at": row.get("approved_at"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
@@ -6280,6 +6670,144 @@ def _owned_experiment_run(run_id: str, user_id: str) -> dict[str, Any]:
     return require_owned_row("experiment_runs", run_id, user_id)
 
 
+def _complete_sandboxed_experiment_run(
+    *,
+    run: dict[str, Any],
+    user_id: str,
+    status: str,
+    exit_code: int,
+    stdout_excerpt: str = "",
+    stderr_excerpt: str = "",
+    output_files: list[dict[str, Any]] | None = None,
+    environment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    completed_at = datetime.now(timezone.utc).isoformat()
+    result = (
+        database()
+        .table("experiment_runs")
+        .update(
+            {
+                "status": status,
+                "exit_code": exit_code,
+                "stdout_excerpt": stdout_excerpt[-50_000:] or None,
+                "stderr_excerpt": stderr_excerpt[-50_000:] or None,
+                "output_files": (output_files or [])[:50],
+                "environment": environment or {},
+                "started_at": run.get("started_at") or completed_at,
+                "completed_at": completed_at,
+            }
+        )
+        .eq("id", str(run["id"]))
+        .eq("user_id", user_id)
+        .eq("status", "running")
+        .execute()
+    )
+    if not result.data:
+        raise RuntimeError("Unable to finalize sandboxed experiment run")
+    return result.data[0]
+
+
+def _process_experiment_execution_job(job: dict[str, Any]) -> dict[str, Any]:
+    job_id = str(job["id"])
+    user_id = str(job["user_id"])
+    input_data = job.get("input")
+    run_id = (
+        str(input_data.get("experiment_run_id") or "")
+        if isinstance(input_data, dict)
+        else ""
+    )
+    if not run_id:
+        raise PermanentResearchJobError("实验执行任务缺少运行记录")
+    run = _owned_experiment_run(run_id, user_id)
+    if run.get("execution_mode") != "sandboxed-docker":
+        raise PermanentResearchJobError("实验运行不是 Docker 受控模式")
+    if str(run.get("execution_job_id") or "") != job_id:
+        raise PermanentResearchJobError("实验运行与执行任务不匹配")
+    if run.get("status") != "planned":
+        raise PermanentResearchJobError("实验运行已开始或已经结束")
+
+    artifact = require_owned_row(
+        "research_artifacts",
+        str(run["code_artifact_id"]),
+        user_id,
+    )
+    if artifact.get("artifact_type") != "code-reproduction":
+        raise PermanentResearchJobError("实验运行未关联代码复现产物")
+    content = artifact.get("content")
+    repo_url = str(content.get("repo_url") or "") if isinstance(content, dict) else ""
+    if not repo_url:
+        raise PermanentResearchJobError("代码复现产物缺少公开仓库地址")
+
+    started_at = datetime.now(timezone.utc).isoformat()
+    started = (
+        database()
+        .table("experiment_runs")
+        .update({"status": "running", "started_at": started_at})
+        .eq("id", run_id)
+        .eq("user_id", user_id)
+        .eq("status", "planned")
+        .execute()
+    )
+    if not started.data:
+        raise PermanentResearchJobError("实验运行状态已变化")
+    run = started.data[0]
+    update_research_job_progress(job_id, 15)
+
+    try:
+        execution = execute_repository_run(
+            repo_url=repo_url,
+            commit_sha=str(run.get("commit_sha") or ""),
+            command=str(run.get("command") or ""),
+        )
+    except (SandboxCommandError, SandboxConfigurationError) as exc:
+        updated = _complete_sandboxed_experiment_run(
+            run=run,
+            user_id=user_id,
+            status="failed",
+            exit_code=125,
+            stderr_excerpt=str(exc),
+            environment={"executor": "docker", "network": "none"},
+        )
+        update_research_job_progress(job_id, 90)
+        return {"experiment_run_id": run_id, "status": updated["status"]}
+
+    status = "succeeded" if execution.exit_code == 0 else "failed"
+    output_files = execution.output_files
+    capture_warning = None
+    if status == "succeeded" and execution.captured_files:
+        output_files, capture_warning = _persist_experiment_result_files(
+            run=run,
+            user_id=user_id,
+            output_files=output_files,
+            captured_files=execution.captured_files,
+        )
+    environment = dict(execution.environment)
+    if capture_warning:
+        environment["result_capture_warning"] = capture_warning
+    updated = _complete_sandboxed_experiment_run(
+        run=run,
+        user_id=user_id,
+        status=status,
+        exit_code=execution.exit_code,
+        stdout_excerpt=execution.stdout_excerpt,
+        stderr_excerpt=execution.stderr_excerpt,
+        output_files=output_files,
+        environment=environment,
+    )
+    update_research_job_progress(job_id, 90)
+    record_activity(
+        user_id,
+        "experiment",
+        "Docker 受控执行完成",
+        status,
+        entity_type="experiment-run",
+        entity_id=run_id,
+        project_id=run.get("project_id"),
+        metadata={"exit_code": execution.exit_code},
+    )
+    return {"experiment_run_id": run_id, "status": updated["status"]}
+
+
 def _resolve_experiment_run_for_results(
     run_id: str | None,
     user_id: str,
@@ -6297,6 +6825,94 @@ def _resolve_experiment_run_for_results(
     return run
 
 
+def _persist_experiment_result_files(
+    *,
+    run: dict[str, Any],
+    user_id: str,
+    output_files: list[dict[str, Any]],
+    captured_files: list[CapturedResultFile],
+) -> tuple[list[dict[str, Any]], str | None]:
+    persisted_by_path: dict[str, dict[str, Any]] = {}
+    failures = 0
+    for captured in captured_files:
+        file_id = str(uuid.uuid4())
+        safe_name = _safe_filename(captured.name)
+        storage_path = f"{user_id}/{run['id']}/{file_id}-{safe_name}"
+        uploaded = False
+        try:
+            database().storage.from_("experiment-results").upload(
+                path=storage_path,
+                file=captured.content,
+                file_options={
+                    "content-type": captured.media_type,
+                    "upsert": "false",
+                },
+            )
+            uploaded = True
+            saved = (
+                database()
+                .table("experiment_result_files")
+                .insert(
+                    {
+                        "id": file_id,
+                        "user_id": user_id,
+                        "project_id": run.get("project_id"),
+                        "experiment_run_id": str(run["id"]),
+                        "file_name": captured.name,
+                        "relative_path": captured.relative_path,
+                        "storage_path": storage_path,
+                        "media_type": captured.media_type,
+                        "size_bytes": captured.size_bytes,
+                        "checksum_sha256": captured.sha256,
+                    }
+                )
+                .execute()
+            )
+            if not saved.data:
+                raise RuntimeError("Unable to persist experiment result metadata")
+            persisted_by_path[captured.relative_path] = {
+                "id": file_id,
+                "stored": True,
+                "analyzable": True,
+            }
+        except Exception:
+            failures += 1
+            logger.warning(
+                "Experiment result file could not be persisted run=%s path=%s",
+                run.get("id"),
+                captured.relative_path,
+            )
+            if uploaded:
+                try:
+                    database().storage.from_("experiment-results").remove([storage_path])
+                except Exception:
+                    logger.warning(
+                        "Unable to clean failed experiment result upload path=%s",
+                        storage_path,
+                    )
+
+    normalized: list[dict[str, Any]] = []
+    for item in output_files:
+        if not isinstance(item, dict):
+            continue
+        relative_path = str(item.get("relative_path") or "")
+        persisted = persisted_by_path.get(relative_path)
+        normalized.append(
+            {
+                **item,
+                "stored": bool(persisted),
+                "analyzable": bool(persisted),
+                **(persisted or {}),
+            }
+        )
+    warning = (
+        "部分可分析结果文件未能进入私有存储"
+        if failures
+        else None
+    )
+    return normalized, warning
+
+
 def _link_result_artifact_to_experiment_run(
     run: dict[str, Any] | None,
     user_id: str,
@@ -6312,10 +6928,22 @@ def _link_result_artifact_to_experiment_run(
     ]
     if result_file and result_file.get("name"):
         name = str(result_file["name"])
-        normalized_files = [
-            item for item in normalized_files if str(item.get("name") or "") != name
-        ]
-        normalized_files.append(result_file)
+        matched = False
+        merged_files: list[dict[str, Any]] = []
+        for item in normalized_files:
+            same_file = (
+                str(item.get("id") or "") == str(result_file.get("id") or "")
+                if result_file.get("id")
+                else str(item.get("name") or "") == name
+            )
+            if same_file:
+                merged_files.append({**item, **result_file})
+                matched = True
+            else:
+                merged_files.append(item)
+        if not matched:
+            merged_files.append(result_file)
+        normalized_files = merged_files
     result = (
         database()
         .table("experiment_runs")
@@ -6331,6 +6959,19 @@ def _link_result_artifact_to_experiment_run(
     )
     if not result.data:
         raise HTTPException(status_code=500, detail="关联实验运行与结果分析失败")
+    result_file_id = str((result_file or {}).get("id") or "").strip()
+    if result_file_id:
+        linked_file = (
+            database()
+            .table("experiment_result_files")
+            .update({"result_artifact_id": artifact_id})
+            .eq("id", result_file_id)
+            .eq("user_id", user_id)
+            .eq("experiment_run_id", str(run["id"]))
+            .execute()
+        )
+        if not linked_file.data:
+            raise HTTPException(status_code=500, detail="关联结果文件与分析产物失败")
 
 
 @router.post(
@@ -6353,22 +6994,33 @@ def create_experiment_run(
             status_code=422,
             detail="环境快照不能包含密码、Token、API Key 或 API Secret",
         )
+    if payload.execution_mode == "sandboxed-docker":
+        if not docker_execution_enabled():
+            raise HTTPException(
+                status_code=503,
+                detail="Docker 受控执行尚未启用，请检查后端运行配置",
+            )
+        try:
+            parse_approved_command(payload.command)
+        except SandboxCommandError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+    run_values = {
+        "user_id": user_id,
+        "project_id": code_artifact.get("project_id"),
+        "code_artifact_id": str(code_artifact["id"]),
+        "execution_mode": payload.execution_mode,
+        "status": "planned",
+        "commit_sha": payload.commit_sha.lower(),
+        "command": payload.command,
+        "environment": payload.environment,
+        "notes": payload.notes,
+    }
+    if payload.execution_mode == "sandboxed-docker":
+        run_values["approved_at"] = datetime.now(timezone.utc).isoformat()
     result = (
         database()
         .table("experiment_runs")
-        .insert(
-            {
-                "user_id": user_id,
-                "project_id": code_artifact.get("project_id"),
-                "code_artifact_id": str(code_artifact["id"]),
-                "execution_mode": "manual-evidence",
-                "status": "planned",
-                "commit_sha": payload.commit_sha.lower(),
-                "command": payload.command,
-                "environment": payload.environment,
-                "notes": payload.notes,
-            }
-        )
+        .insert(run_values)
         .execute()
     )
     if not result.data:
@@ -6384,6 +7036,59 @@ def create_experiment_run(
         project_id=code_artifact.get("project_id"),
     )
     return _experiment_run_response(run)
+
+
+@router.post(
+    "/experiment-runs/{run_id}/execute",
+    status_code=202,
+    response_model=ResearchJobResponse,
+)
+def execute_experiment_run(run_id: str, user=Depends(get_current_user)):
+    user_id = str(user.id)
+    run = _owned_experiment_run(run_id, user_id)
+    if run.get("execution_mode") != "sandboxed-docker":
+        raise HTTPException(status_code=409, detail="只有 Docker 受控运行可以自动执行")
+    if run.get("status") != "planned":
+        raise HTTPException(status_code=409, detail="只有待运行实验可以开始执行")
+    if run.get("execution_job_id"):
+        return _public_research_job(
+            get_owned_research_job(str(run["execution_job_id"]), user_id)
+        )
+    if not docker_execution_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Docker 受控执行尚未启用，请检查后端运行配置",
+        )
+
+    job = create_research_job(
+        user_id=user_id,
+        job_type="experiment-execution",
+        input_data={"experiment_run_id": run_id},
+        project_id=run.get("project_id"),
+        max_attempts=1,
+    )
+    linked = (
+        database()
+        .table("experiment_runs")
+        .update({"execution_job_id": str(job["id"])})
+        .eq("id", run_id)
+        .eq("user_id", user_id)
+        .eq("status", "planned")
+        .execute()
+    )
+    if not linked.data:
+        raise HTTPException(status_code=409, detail="实验运行状态已变化，请刷新后重试")
+    record_activity(
+        user_id,
+        "experiment",
+        "批准 Docker 受控执行",
+        str(run.get("commit_sha") or "")[:12],
+        entity_type="experiment-run",
+        entity_id=run_id,
+        project_id=run.get("project_id"),
+        metadata={"job_id": str(job["id"])},
+    )
+    return _public_research_job(job)
 
 
 @router.get("/experiment-runs", response_model=ExperimentRunListResponse)
@@ -6533,20 +7238,38 @@ def _read_tabular(file_name: str, content: bytes) -> list[dict[str, Any]]:
 
 
 def _tabular_stats(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    numeric: dict[str, list[float]] = {}
+    columns = list(dict.fromkeys(str(key) for row in rows for key in row))[:200]
+    numeric: dict[str, dict[str, Any]] = {
+        key: {"values": [], "missing_count": 0, "invalid_count": 0}
+        for key in columns
+    }
     for row in rows:
-        for key, value in row.items():
+        for key in columns:
+            value = row.get(key)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                numeric[key]["missing_count"] += 1
+                continue
             try:
                 number = float(value)
-                if math.isfinite(number):
-                    numeric.setdefault(str(key), []).append(number)
             except (TypeError, ValueError):
+                numeric[key]["invalid_count"] += 1
                 continue
+            if not math.isfinite(number):
+                numeric[key]["invalid_count"] += 1
+                continue
+            numeric[key]["values"].append(number)
     stats: list[dict[str, Any]] = []
-    for metric, values in list(numeric.items())[:50]:
+    for metric, summary in numeric.items():
+        values = summary["values"]
+        if not values:
+            continue
         mean = statistics.fmean(values)
         std = statistics.stdev(values) if len(values) > 1 else 0.0
-        margin = 1.96 * std / math.sqrt(len(values)) if values else 0.0
+        margin = (
+            _student_t_critical_95(len(values) - 1) * std / math.sqrt(len(values))
+            if len(values) > 1
+            else 0.0
+        )
         stats.append(
             {
                 "metric": metric,
@@ -6556,9 +7279,58 @@ def _tabular_stats(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "max": max(values),
                 "ci95": [mean - margin, mean + margin],
                 "count": len(values),
+                "missing_count": int(summary["missing_count"]),
+                "invalid_count": int(summary["invalid_count"]),
+                "ci_method": "student-t",
             }
         )
+        if len(stats) >= 50:
+            break
     return stats
+
+
+def _student_t_critical_95(degrees_of_freedom: int) -> float:
+    if degrees_of_freedom <= 0:
+        return 0.0
+    small_sample = {
+        1: 12.706,
+        2: 4.303,
+        3: 3.182,
+        4: 2.776,
+        5: 2.571,
+        6: 2.447,
+        7: 2.365,
+        8: 2.306,
+        9: 2.262,
+        10: 2.228,
+        11: 2.201,
+        12: 2.179,
+        13: 2.160,
+        14: 2.145,
+        15: 2.131,
+        16: 2.120,
+        17: 2.110,
+        18: 2.101,
+        19: 2.093,
+        20: 2.086,
+        21: 2.080,
+        22: 2.074,
+        23: 2.069,
+        24: 2.064,
+        25: 2.060,
+        26: 2.056,
+        27: 2.052,
+        28: 2.048,
+        29: 2.045,
+        30: 2.042,
+    }
+    if degrees_of_freedom <= 30:
+        return small_sample[degrees_of_freedom]
+    z = statistics.NormalDist().inv_cdf(0.975)
+    df = float(degrees_of_freedom)
+    return z + (z**3 + z) / (4 * df) + (5 * z**5 + 16 * z**3 + 3 * z) / (
+        96 * df**2
+    )
 
 
 def _analyze_result_summary(
@@ -6657,6 +7429,7 @@ def _analyze_result_summary(
         "row_count": row_count,
         "generation_mode": "local-statistics+xunfei-star-agent",
         "experiment_run_id": experiment_run_id,
+        "result_file_id": (result_file or {}).get("id"),
         "code_artifact_id": resolved_repo_id,
     }
     artifact = _save_artifact(
@@ -6741,31 +7514,7 @@ async def analyze_results(
         raise HTTPException(status_code=400, detail="分析配置不是合法 JSON") from None
     if not isinstance(parsed_config, dict):
         raise HTTPException(status_code=400, detail="分析配置必须是 JSON 对象")
-    numeric: dict[str, list[float]] = {}
-    for row in rows:
-        for key, value in row.items():
-            try:
-                number = float(value)
-                if math.isfinite(number):
-                    numeric.setdefault(str(key), []).append(number)
-            except (TypeError, ValueError):
-                continue
-    stats = []
-    for metric, values in list(numeric.items())[:50]:
-        mean = statistics.fmean(values)
-        std = statistics.stdev(values) if len(values) > 1 else 0.0
-        margin = 1.96 * std / math.sqrt(len(values)) if values else 0.0
-        stats.append(
-            {
-                "metric": metric,
-                "mean": mean,
-                "std": std,
-                "min": min(values),
-                "max": max(values),
-                "ci95": [mean - margin, mean + margin],
-                "count": len(values),
-            }
-        )
+    stats = _tabular_stats(rows)
     if not stats:
         raise HTTPException(status_code=422, detail="结果文件中没有可分析的数值字段")
     agent = _pick_agent("result")
@@ -6948,6 +7697,82 @@ async def enqueue_result_analysis(
     )
 
 
+@router.post(
+    "/results/analyze-run-file-async",
+    status_code=202,
+    response_model=ResearchJobResponse,
+)
+def enqueue_stored_result_analysis(
+    payload: AnalyzeExperimentResultFileRequest,
+    user=Depends(get_current_user),
+):
+    user_id = str(user.id)
+    experiment_run = _resolve_experiment_run_for_results(
+        payload.experiment_run_id,
+        user_id,
+        None,
+    )
+    result_file = require_owned_row(
+        "experiment_result_files",
+        payload.result_file_id,
+        user_id,
+    )
+    if str(result_file.get("experiment_run_id") or "") != payload.experiment_run_id:
+        raise HTTPException(status_code=409, detail="结果文件不属于所选实验运行")
+    if result_file.get("result_artifact_id"):
+        raise HTTPException(status_code=409, detail="该结果文件已经生成分析产物")
+    storage_path = str(result_file.get("storage_path") or "").strip()
+    if not storage_path:
+        raise HTTPException(status_code=409, detail="结果文件缺少私有存储路径")
+    try:
+        raw = database().storage.from_("experiment-results").download(storage_path)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="读取实验结果文件失败，请稍后重试") from exc
+    if not isinstance(raw, bytes) or not raw:
+        raise HTTPException(status_code=502, detail="读取实验结果文件失败，请稍后重试")
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="实验结果文件超过 5MB")
+    checksum = hashlib.sha256(raw).hexdigest()
+    if checksum != str(result_file.get("checksum_sha256") or ""):
+        raise HTTPException(status_code=409, detail="实验结果文件完整性校验失败")
+
+    file_name = str(result_file.get("file_name") or "results.csv")
+    try:
+        rows = _read_tabular(file_name, raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"无法读取结果文件：{exc}") from None
+    if not rows:
+        raise HTTPException(status_code=422, detail="结果文件没有可分析的数据行")
+    stats = _tabular_stats(rows)
+    if not stats:
+        raise HTTPException(status_code=422, detail="结果文件中没有可分析的数值字段")
+
+    public_result_file = {
+        "id": str(result_file["id"]),
+        "name": file_name,
+        "relative_path": result_file.get("relative_path"),
+        "size_bytes": len(raw),
+        "sha256": checksum,
+        "media_type": result_file.get("media_type"),
+    }
+    input_data = {
+        "file_name": file_name,
+        "config": {"source": "sandboxed-experiment-output"},
+        "stats": stats,
+        "row_count": len(rows),
+        "project_id": experiment_run.get("project_id"),
+        "repo_id": str(experiment_run["code_artifact_id"]),
+        "experiment_run_id": str(experiment_run["id"]),
+        "result_file": public_result_file,
+    }
+    return _enqueue_agent_job(
+        user_id=user_id,
+        job_type="result-analysis",
+        input_data=input_data,
+        project_id=experiment_run.get("project_id"),
+    )
+
+
 @router.get("/results/{artifact_id}", response_model=ResultAnalysisResponse)
 def get_result_analysis(artifact_id: str, user=Depends(get_current_user)):
     artifact = require_owned_row("research_artifacts", artifact_id, str(user.id))
@@ -6991,6 +7816,23 @@ def explore_knowledge_graph(
         nodes_query = nodes_query.eq("id", nodeId)
     nodes = nodes_query.limit(limit).execute().data or []
     node_ids = {row["id"] for row in nodes}
+    evidence_rows = (
+        _safe_data(
+            lambda: database()
+            .table("knowledge_graph_evidence")
+            .select(
+                "node_id,paper_id,section_heading,citation,excerpt,page_start,page_end"
+            )
+            .eq("user_id", user_id)
+            .in_("node_id", list(node_ids))
+            .execute()
+        )
+        if node_ids
+        else []
+    )
+    evidence_by_node = {
+        str(item["node_id"]): item for item in evidence_rows if item.get("node_id")
+    }
     edges = (
         database()
         .table("knowledge_edges")
@@ -7013,10 +7855,85 @@ def explore_knowledge_graph(
     ]
     return {
         "nodes": [
-            {key: row[key] for key in ("id", "label", "category", "description")}
+            {
+                **{key: row[key] for key in ("id", "label", "category", "description")},
+                "evidence": evidence_by_node.get(str(row["id"])),
+            }
             for row in nodes
         ],
         "edges": visible_edges,
+    }
+
+
+@router.post("/kg/rebuild")
+def rebuild_paper_knowledge_graph(user=Depends(get_current_user)):
+    user_id = str(user.id)
+    papers = (
+        database()
+        .table("papers")
+        .select("id,title,authors,project_id")
+        .eq("user_id", user_id)
+        .eq("status", "completed")
+        .order("updated_at", desc=True)
+        .limit(100)
+        .execute()
+    ).data or []
+    reports = (
+        database()
+        .table("paper_reports")
+        .select("paper_id,sections,content")
+        .eq("user_id", user_id)
+        .eq("report_type", "deep-read")
+        .eq("status", "completed")
+        .execute()
+    ).data or []
+    reports_by_paper = {str(item["paper_id"]): item for item in reports}
+    completed = 0
+    failed = 0
+    node_count = 0
+    edge_count = 0
+    for paper in papers:
+        report = reports_by_paper.get(str(paper["id"]))
+        if not report:
+            continue
+        sections = report.get("sections") if isinstance(report.get("sections"), list) else []
+        content = report.get("content") if isinstance(report.get("content"), dict) else {}
+        authors = paper.get("authors") if isinstance(paper.get("authors"), list) else []
+        graph = normalize_paper_graph(
+            content.get("graph"),
+            title=str(paper.get("title") or "未命名论文"),
+            authors=[str(author) for author in authors],
+            sections=sections,
+        )
+        try:
+            result = sync_paper_knowledge_graph(
+                database(),
+                user_id=user_id,
+                paper_id=str(paper["id"]),
+                project_id=(str(paper["project_id"]) if paper.get("project_id") else None),
+                graph=graph,
+            )
+        except KnowledgeGraphUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from None
+        except Exception:
+            failed += 1
+            logger.exception("Unable to rebuild paper graph paper=%s", paper.get("id"))
+            continue
+        completed += 1
+        node_count += int(result.get("node_count") or 0)
+        edge_count += int(result.get("edge_count") or 0)
+    record_activity(
+        user_id,
+        "knowledge-graph",
+        "同步论文图谱",
+        f"完成 {completed} 篇，失败 {failed} 篇",
+        metadata={"node_count": node_count, "edge_count": edge_count},
+    )
+    return {
+        "completed_papers": completed,
+        "failed_papers": failed,
+        "node_count": node_count,
+        "edge_count": edge_count,
     }
 
 

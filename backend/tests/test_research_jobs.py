@@ -1,8 +1,9 @@
 import unittest
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 
 from api import routes
 from services import research_job_service
@@ -213,6 +214,106 @@ class ResearchJobRouteTests(unittest.TestCase):
         self.assertEqual(result, expected)
         self.assertEqual(handler.call_args.kwargs["user"].id, "user-1")
         self.assertEqual(progress.call_args_list, [call("job-1", 10), call("job-1", 90)])
+
+    def test_paper_knowledge_sync_runs_as_durable_job(self):
+        paper = {
+            "id": "paper-1",
+            "user_id": "user-1",
+            "file_path": "user-1/paper-1/paper.pdf",
+            "file_name": "paper.pdf",
+            "mime_type": "application/pdf",
+            "checksum_sha256": "abc",
+            "project_id": None,
+        }
+        database = MagicMock()
+        database.storage.from_.return_value.download.return_value = b"%PDF-content"
+        mapping = {"id": "mapping-1", "status": "pending", "file_name": "paper.pdf"}
+        completed = {"status": "uploaded", "attempt_count": 1}
+        with (
+            patch.object(routes, "database", return_value=database),
+            patch.object(routes, "require_owned_row", return_value=paper),
+            patch.object(routes, "_paper_knowledge_mapping", return_value=(True, mapping)),
+            patch.object(
+                routes,
+                "_complete_paper_knowledge_sync",
+                return_value=completed,
+            ) as complete,
+            patch.object(routes, "update_research_job_progress") as progress,
+        ):
+            result = routes.process_research_job(
+                {
+                    "id": "job-1",
+                    "user_id": "user-1",
+                    "paper_id": "paper-1",
+                    "job_type": "paper-knowledge-sync",
+                    "input": {"paper_id": "paper-1"},
+                }
+            )
+
+        self.assertEqual(result["knowledge_sync"]["status"], "uploaded")
+        self.assertTrue(complete.call_args.kwargs["raise_on_failure"])
+        self.assertEqual(
+            progress.call_args_list,
+            [call("job-1", 20), call("job-1", 50), call("job-1", 90)],
+        )
+
+
+class PaperUploadReuseTests(unittest.IsolatedAsyncioTestCase):
+    def test_reusable_lookup_is_scoped_to_owner_project_and_completed_report(self):
+        paper_query = MagicMock()
+        report_query = MagicMock()
+        for query in (paper_query, report_query):
+            query.select.return_value = query
+            query.eq.return_value = query
+            query.is_.return_value = query
+            query.order.return_value = query
+            query.limit.return_value = query
+        paper_query.execute.return_value = SimpleNamespace(
+            data=[{"id": "paper-1", "title": "Existing paper"}]
+        )
+        report_query.execute.return_value = SimpleNamespace(data=[{"id": "report-1"}])
+        service = MagicMock()
+        service.table.side_effect = [paper_query, report_query]
+
+        with patch.object(routes, "database", return_value=service):
+            result = routes._find_reusable_completed_paper(
+                user_id="user-1",
+                project_id="project-1",
+                checksum_sha256="checksum-1",
+            )
+
+        self.assertEqual(result["id"], "paper-1")
+        self.assertIn(call("user_id", "user-1"), paper_query.eq.call_args_list)
+        self.assertIn(call("project_id", "project-1"), paper_query.eq.call_args_list)
+        self.assertIn(
+            call("checksum_sha256", "checksum-1"), paper_query.eq.call_args_list
+        )
+        self.assertIn(call("status", "completed"), report_query.eq.call_args_list)
+
+    async def test_completed_report_is_reused_without_creating_agent_job(self):
+        reusable = {"id": "paper-1", "title": "Existing paper"}
+        upload = UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-demo"))
+        with (
+            patch.object(routes, "_validated_project_id", return_value="project-1"),
+            patch.object(
+                routes,
+                "_find_reusable_completed_paper",
+                return_value=reusable,
+            ) as find_reusable,
+            patch.object(routes, "record_activity"),
+            patch.object(routes, "create_research_job") as create_job,
+        ):
+            result = await routes.upload_paper_async(
+                file=upload,
+                project_id="project-1",
+                user=SimpleNamespace(id="user-1"),
+            )
+
+        self.assertTrue(result["reused"])
+        self.assertEqual(result["paper_id"], "paper-1")
+        self.assertIsNone(result["job_id"])
+        find_reusable.assert_called_once()
+        create_job.assert_not_called()
 
 
 if __name__ == "__main__":

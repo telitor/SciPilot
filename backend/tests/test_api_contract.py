@@ -119,6 +119,10 @@ class FrontendBackendContractTests(unittest.TestCase):
         self.assertIn("202", responses)
         result_responses = self.operation("/results/analyze-async", "post")["responses"]
         self.assertIn("202", result_responses)
+        stored_result_responses = self.operation(
+            "/results/analyze-run-file-async", "post"
+        )["responses"]
+        self.assertIn("202", stored_result_responses)
 
     def test_workflow_link_fields_are_optional_and_published(self):
         json_links = {

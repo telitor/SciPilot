@@ -20,6 +20,7 @@ import type {
   AgentCategory,
   AgentKnowledgeCitation,
   AiRunSummary,
+  CitationValidation,
   Conversation,
   MessageFeedback,
   PublicAgent,
@@ -36,6 +37,7 @@ interface PanelMessage {
   role: 'user' | 'assistant';
   content: string;
   citations: AgentKnowledgeCitation[];
+  citationValidation?: CitationValidation;
   run?: AiRunSummary | null;
   feedback?: MessageFeedback | null;
 }
@@ -73,6 +75,9 @@ function normalizeMessages(value: unknown): PanelMessage[] {
   return value.flatMap((item) => {
     if (!item || typeof item !== 'object') return [];
     const message = item as Record<string, unknown>;
+    const metadata = message.metadata && typeof message.metadata === 'object'
+      ? message.metadata as Record<string, unknown>
+      : undefined;
     const role = message.role;
     const content = typeof message.content === 'string' ? message.content.trim() : '';
     if ((role !== 'user' && role !== 'assistant') || !content) return [];
@@ -81,6 +86,13 @@ function normalizeMessages(value: unknown): PanelMessage[] {
       role,
       content,
       citations: normalizeCitations(message.citations),
+      citationValidation: (
+        message.citation_validation && typeof message.citation_validation === 'object'
+          ? message.citation_validation
+          : metadata?.citation_validation && typeof metadata.citation_validation === 'object'
+            ? metadata.citation_validation
+            : undefined
+      ) as CitationValidation | undefined,
       run: message.run && typeof message.run === 'object'
         ? message.run as unknown as AiRunSummary
         : null,
@@ -270,6 +282,7 @@ export default function AgentKnowledgePanel({
           role: 'assistant',
           content: reply,
           citations: normalizeCitations(response.data.citations),
+          citationValidation: response.data.citation_validation,
           run: response.data.run || null,
           feedback: null,
         },
@@ -411,6 +424,22 @@ export default function AgentKnowledgePanel({
                     ))}
                   </div>
                 )}
+                {message.role === 'assistant' && message.citationValidation
+                  && message.citationValidation.status !== 'not_applicable' && (
+                    <p className={`mt-2 text-xs ${
+                      message.citationValidation.status === 'supported'
+                        ? 'text-sci-success'
+                        : 'text-sci-warning'
+                    }`}>
+                      {message.citationValidation.status === 'supported'
+                        ? '引用校验通过'
+                        : message.citationValidation.status === 'partial'
+                          ? '部分结论的引用覆盖不足'
+                          : message.citationValidation.status === 'invalid'
+                            ? '回答包含无效引用编号'
+                            : '回答尚未形成可核查引用'}
+                    </p>
+                  )}
                 {message.role === 'assistant' && message.run && (
                   <p className="mt-2 text-xs text-sci-muted">
                     {message.run.status === 'degraded' ? '降级响应' : '模型响应'}

@@ -20,8 +20,23 @@ def parse_agent_json_object(raw_text: str) -> dict[str, Any] | None:
     try:
         data = json.loads(json_text)
     except (TypeError, ValueError, json.JSONDecodeError):
-        return None
-    return data if isinstance(data, dict) else None
+        data = None
+    if isinstance(data, dict):
+        return data
+
+    # Paper reports place the optional graph after the required sections. If a
+    # provider truncates that large suffix, preserve the complete report core.
+    graph_match = re.search(r',\s*"graph"\s*:', json_text)
+    if graph_match:
+        try:
+            report_data = json.loads(f"{json_text[:graph_match.start()]}\n}}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            report_data = None
+        if isinstance(report_data, dict) and isinstance(
+            report_data.get("sections"), list
+        ):
+            return report_data
+    return None
 
 
 def normalized_string_list(value: Any, *, limit: int = 10) -> list[str]:

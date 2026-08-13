@@ -14,12 +14,12 @@ import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
 import ArtifactReviewToolbar, { mergeArtifactDetail } from '@/components/ArtifactReviewToolbar';
 import ProjectContextBar from '@/components/ProjectContextBar';
 import { useDurableResearchJob } from '@/hooks/useDurableResearchJob';
-import { artifactAPI, resultAPI } from '@/services/api';
+import { artifactAPI, experimentRunAPI, resultAPI } from '@/services/api';
 import { getApiErrorMessage } from '@/services/errors';
 import { useAuthStore } from '@/store/authStore';
 import { useSelectedProjectId } from '@/store/projectStore';
 import { useUIStore } from '@/store/uiStore';
-import type { ResultAnalysis } from '@/types';
+import type { ExperimentRun, ResultAnalysis } from '@/types';
 
 // Register ECharts modules manually to avoid window.echarts dependency
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
@@ -36,6 +36,8 @@ function ResultAnalyze() {
   const runStorageKey = `${storageKey}:run-id`;
   const jobStorageKey = `${storageKey}:job-id`;
   const [file, setFile] = useState<File | null>(null);
+  const [linkedRun, setLinkedRun] = useState<ExperimentRun | null>(null);
+  const [selectedResultFileId, setSelectedResultFileId] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<import('@/types').ResultAnalysis | null>(null);
   const [draftAnalysis, setDraftAnalysis] = useState<ResultAnalysis | null>(null);
@@ -101,6 +103,39 @@ function ResultAnalyze() {
       });
   }, [linkedRepoId, linkedRunId, runStorageKey, sourceStorageKey, storageKey]);
 
+  useEffect(() => {
+    setLinkedRun(null);
+    setSelectedResultFileId('');
+    if (!linkedRunId) return;
+    experimentRunAPI.get(linkedRunId)
+      .then((response) => {
+        setLinkedRun(response.data);
+        if (response.data.result_artifact_id) {
+          return resultAPI.getAnalysis(response.data.result_artifact_id).then((artifactResponse) => {
+            setAnalysis(artifactResponse.data);
+            setDraftAnalysis(null);
+            setIsEditing(false);
+            localStorage.setItem(storageKey, response.data.result_artifact_id as string);
+            if (linkedRepoId) localStorage.setItem(sourceStorageKey, linkedRepoId);
+            localStorage.setItem(runStorageKey, linkedRunId);
+            setChartReady(true);
+          });
+        }
+        const firstAnalyzable = response.data.output_files.find(
+          (item) => item.id && item.stored && item.analyzable,
+        );
+        if (firstAnalyzable?.id) setSelectedResultFileId(firstAnalyzable.id);
+        return undefined;
+      })
+      .catch((error) => {
+        addNotification({
+          type: 'error',
+          message: getApiErrorMessage(error, '实验运行结果加载失败'),
+          duration: 5000,
+        });
+      });
+  }, [addNotification, linkedRepoId, linkedRunId, runStorageKey, sourceStorageKey, storageKey]);
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFile = e.target.files?.[0];
     if (!uploadedFile) return;
@@ -111,23 +146,30 @@ function ResultAnalyze() {
       return;
     }
     setFile(uploadedFile);
+    setSelectedResultFileId('');
   };
 
   const handleAnalyze = async () => {
     if (isAnalyzing || isJobRunning) return;
-    if (!file) {
-      addNotification({ type: 'warning', message: '请先上传数据文件', duration: 3000 });
+    if (linkedRun?.result_artifact_id) {
+      addNotification({ type: 'info', message: '该实验运行已生成结果分析，无需重复提交。', duration: 3000 });
+      return;
+    }
+    if (!file && !selectedResultFileId) {
+      addNotification({ type: 'warning', message: '请选择运行产物或上传数据文件', duration: 3000 });
       return;
     }
     setIsAnalyzing(true);
     try {
-      const response = await resultAPI.analyzeAsync(
-        file,
-        undefined,
-        selectedProjectId,
-        linkedRepoId,
-        linkedRunId,
-      );
+      const response = selectedResultFileId && linkedRunId
+        ? await resultAPI.analyzeRunFileAsync(linkedRunId, selectedResultFileId)
+        : await resultAPI.analyzeAsync(
+            file as File,
+            undefined,
+            selectedProjectId,
+            linkedRepoId,
+            linkedRunId,
+          );
       trackJob(response.data);
     } catch (error) {
       addNotification({
@@ -172,6 +214,7 @@ function ResultAnalyze() {
           row_count: draftAnalysis.row_count,
           generation_mode: draftAnalysis.generation_mode,
           experiment_run_id: draftAnalysis.experiment_run_id,
+          result_file_id: draftAnalysis.result_file_id,
           code_artifact_id: draftAnalysis.code_artifact_id,
         },
         undefined,
@@ -308,6 +351,42 @@ function ResultAnalyze() {
 
       {/* Upload */}
       <div className="sci-card-glow">
+        {linkedRunId && (
+          <div className="mb-4">
+            <label htmlFor="run-result-file" className="mb-2 block text-sm font-medium text-sci-ink">
+              使用受控实验产物
+            </label>
+            <select
+              id="run-result-file"
+              className="sci-input w-full"
+              value={selectedResultFileId}
+              disabled={Boolean(linkedRun?.result_artifact_id)}
+              onChange={(event) => {
+                setSelectedResultFileId(event.target.value);
+                if (event.target.value) setFile(null);
+              }}
+            >
+              <option value="">手工上传其他结果文件</option>
+              {(linkedRun?.output_files || [])
+                .filter((item) => item.id && item.stored && item.analyzable)
+                .map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.relative_path || item.name} · {typeof item.size_bytes === 'number' ? `${(item.size_bytes / 1024).toFixed(1)} KB` : '大小未知'}
+                  </option>
+                ))}
+            </select>
+            {linkedRun && !linkedRun.output_files.some((item) => item.id && item.stored && item.analyzable) && (
+              <p className="mt-2 text-xs text-sci-muted">
+                该运行没有已保存的 CSV、JSON 或 XLSX 产物，请在下方手工上传。
+              </p>
+            )}
+            {linkedRun?.result_artifact_id && (
+              <p className="mt-2 text-xs text-sci-muted">
+                该运行已完成结果分析，下面展示已保存的分析产物。
+              </p>
+            )}
+          </div>
+        )}
         <div className="flex items-center gap-4">
           <div className="flex-1">
             <label className="block text-sm font-medium text-sci-ink mb-2">
@@ -337,7 +416,7 @@ function ResultAnalyze() {
           </div>
           <button
             onClick={handleAnalyze}
-            disabled={isAnalyzing || isJobRunning || !file}
+            disabled={isAnalyzing || isJobRunning || Boolean(linkedRun?.result_artifact_id) || (!file && !selectedResultFileId)}
             className="sci-btn-primary self-end"
           >
             {isAnalyzing || isJobRunning ? (
@@ -443,6 +522,18 @@ function ResultAnalyze() {
                     <div className="flex justify-between">
                       <span>95% CI</span>
                       <span>[{stat.ci95[0].toFixed(3)}, {stat.ci95[1].toFixed(3)}]</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>有效样本</span>
+                      <span>{stat.count ?? 0}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>缺失 / 非法</span>
+                      <span>{stat.missing_count ?? 0} / {stat.invalid_count ?? 0}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>区间方法</span>
+                      <span>Student-t</span>
                     </div>
                   </div>
                 </div>

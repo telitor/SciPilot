@@ -42,9 +42,6 @@ import type {
 const apiClient: AxiosInstance = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1',
   timeout: 30000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
 });
 
 // Request interceptor - attach JWT token
@@ -270,6 +267,7 @@ export const codeAPI = {
 export const experimentRunAPI = {
   create: (data: {
     code_artifact_id: string;
+    execution_mode?: 'manual-evidence' | 'sandboxed-docker';
     commit_sha: string;
     command: string;
     environment?: Record<string, unknown>;
@@ -280,6 +278,9 @@ export const experimentRunAPI = {
     apiClient.get<{ items: ExperimentRun[] }>('/experiment-runs', { params }),
 
   get: (runId: string) => apiClient.get<ExperimentRun>(`/experiment-runs/${runId}`),
+
+  execute: (runId: string) =>
+    apiClient.post<ResearchJob>(`/experiment-runs/${runId}/execute`),
 
   update: (
     runId: string,
@@ -334,6 +335,12 @@ export const resultAPI = {
     return apiClient.post<ResearchJob>('/results/analyze-async', formData, { timeout: 60000 });
   },
 
+  analyzeRunFileAsync: (experimentRunId: string, resultFileId: string) =>
+    apiClient.post<ResearchJob>('/results/analyze-run-file-async', {
+      experiment_run_id: experimentRunId,
+      result_file_id: resultFileId,
+    }),
+
   getAnalysis: (id: string) => apiClient.get<ResultAnalysis>(`/results/${id}`),
 };
 
@@ -343,6 +350,13 @@ export const kgAPI = {
     apiClient.get('/kg/explore', { params }),
 
   searchNodes: (query: string) => apiClient.get('/kg/search', { params: { q: query } }),
+
+  rebuild: () => apiClient.post<{
+    completed_papers: number;
+    failed_papers: number;
+    node_count: number;
+    edge_count: number;
+  }>('/kg/rebuild'),
 };
 
 // ---- External Spark Knowledge Base ----

@@ -179,7 +179,7 @@ SciPilot 不追求“无人值守地替研究者做决定”。它追求的是�
 <td width="33%" valign="top"><sub>PROJECT PLANNING</sub><h3>实验规划助手</h3>组织基线、数据集、指标、实验阶段、风险和里程碑。</td>
 </tr>
 <tr>
-<td width="33%" valign="top"><sub>CODE REPRODUCTION</sub><h3>代码复现助手</h3>分析仓库、环境、依赖、入口与复现步骤，辅助定位运行问题。</td>
+<td width="33%" valign="top"><sub>CODE REPRODUCTION</sub><h3>代码复现助手</h3>分析仓库、环境、依赖与入口，并在人工审批后通过 Docker 受控执行采集实验日志与文件证据。</td>
 <td width="33%" valign="top"><sub>RESULT INTERPRETATION</sub><h3>结果分析助手</h3>解释指标变化、异常现象、对比结论和结论边界。</td>
 <td width="33%" valign="top"><sub>SHARED INTELLIGENCE</sub><h3>统一研究上下文</h3>所有助手共享项目、已确认产物、长期记忆、知识检索与质量治理能力。</td>
 </tr>
@@ -273,7 +273,7 @@ flowchart TB
 | Layer | Technology |
 |---|---|
 | Product Experience | React 18, TypeScript, Vite, Zustand, Framer Motion, ECharts |
-| API & Orchestration | FastAPI, Pydantic, background research worker |
+| API & Orchestration | FastAPI, Pydantic, background research worker, Docker execution sandbox |
 | Identity & Data | Supabase Auth, PostgreSQL, Storage, RLS |
 | Intelligence | Xunfei Star Agents, Xunfei MaaS, Spark ChatDoc |
 | Document Processing | pypdf, multipart upload, structured Agent output |
@@ -315,6 +315,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File backend\scripts\verify_dev_e
 
 The setup creates `backend/.venv-scipilot`. The desktop launcher verifies that
 the interpreter can actually start before using it and skips stale environments.
+
+Docker-based experiment execution is opt-in. Install Docker Desktop with WSL 2,
+apply the latest Supabase migration, then set
+`SCIPILOT_DOCKER_EXECUTION_ENABLED=true` in the private `backend/.env`. Dependency
+preparation may use the network; the approved experiment command runs with no
+network and bounded CPU, memory, process count, workspace size and execution time.
 
 ### Backend
 
@@ -445,7 +451,7 @@ SciPilot/
 
 SciPilot 当前是工程预览版。项目已经具备完整研究主线、专业 Agent、后台任务、版本审核、项目记忆、运行观测和离线质量评估。
 
-下一阶段重点不是继续堆叠孤立页面，而是完善管理员质量运营、外部知识库稳定性、真实模型版本回归、复杂 PDF 解析、代码复现安全沙箱、生产配额与告警，以及团队协作权限。
+下一阶段重点不是继续堆叠孤立页面，而是完善管理员质量运营、外部知识库稳定性、真实模型版本回归、复杂 PDF 解析、受控执行镜像覆盖、生产配额与告警，以及团队协作权限。
 
 </details>
 

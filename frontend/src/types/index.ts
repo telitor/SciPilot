@@ -49,6 +49,7 @@ export interface PaperKnowledgeSync {
   last_attempt_at?: string | null;
   vectored_at?: string | null;
   updated_at?: string | null;
+  job_id?: string | null;
 }
 
 export interface Citation {
@@ -66,6 +67,16 @@ export interface ReportSection {
 export interface DeepReadReport {
   paper_id: string;
   sections: ReportSection[];
+}
+
+export interface CitationValidation {
+  status: 'supported' | 'partial' | 'unsupported' | 'invalid' | 'not_applicable';
+  method: 'deterministic-v1' | string;
+  cited_indices: number[];
+  valid_indices: number[];
+  invalid_indices: number[];
+  coverage_score: number;
+  evidence_overlap_score: number;
 }
 
 export type ResearchJobStatus =
@@ -94,10 +105,11 @@ export interface ResearchJob {
 }
 
 export interface PaperUploadJob {
-  job_id: string;
+  job_id: string | null;
   paper_id: string;
   status: ResearchJobStatus;
   progress: number;
+  reused?: boolean;
 }
 
 // ==================== Chat Types ====================
@@ -106,6 +118,7 @@ export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   citations?: Citation[];
+  citation_validation?: CitationValidation;
   created_at: string;
   isStreaming?: boolean;
   run?: AiRunSummary | null;
@@ -374,11 +387,14 @@ export interface CodeReproduction extends ArtifactVersionMetadata {
 }
 
 export interface ExperimentRunOutputFile {
+  id?: string;
   name: string;
   relative_path?: string;
   size_bytes?: number;
   sha256?: string;
   media_type?: string;
+  analyzable?: boolean;
+  stored?: boolean;
 }
 
 export type ExperimentRunStatus =
@@ -393,7 +409,8 @@ export interface ExperimentRun {
   project_id?: string | null;
   code_artifact_id: string;
   result_artifact_id?: string | null;
-  execution_mode: 'manual-evidence';
+  execution_mode: 'manual-evidence' | 'sandboxed-docker';
+  execution_job_id?: string | null;
   status: ExperimentRunStatus;
   commit_sha: string;
   command: string;
@@ -405,6 +422,7 @@ export interface ExperimentRun {
   output_files: ExperimentRunOutputFile[];
   started_at?: string | null;
   completed_at?: string | null;
+  approved_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -425,6 +443,9 @@ export interface StatsSummary {
   max: number;
   ci95: [number, number];
   count?: number;
+  missing_count?: number;
+  invalid_count?: number;
+  ci_method?: 'student-t';
   p_value?: number;
 }
 
@@ -436,6 +457,7 @@ export interface ResultAnalysis extends ArtifactVersionMetadata {
   row_count?: number;
   generation_mode?: string;
   experiment_run_id?: string | null;
+  result_file_id?: string | null;
   code_artifact_id?: string | null;
 }
 
@@ -592,6 +614,14 @@ export interface KGNode {
   label: string;
   category: string;
   description?: string;
+  evidence?: {
+    paper_id: string;
+    section_heading?: string | null;
+    citation?: string | null;
+    excerpt?: string | null;
+    page_start?: number | null;
+    page_end?: number | null;
+  } | null;
   x?: number;
   y?: number;
 }
@@ -655,6 +685,7 @@ export interface KnowledgeSearchResponse {
 export interface KnowledgeAnswerResponse extends KnowledgeSearchResponse {
   answer: string;
   model?: string | null;
+  citation_validation?: CitationValidation;
 }
 
 // ==================== Knowledge-enabled Agent Types ====================
@@ -694,6 +725,7 @@ export interface AgentKnowledgeCitation {
 export interface AgentKnowledgeAnswerResponse {
   reply: string;
   citations: AgentKnowledgeCitation[];
+  citation_validation?: CitationValidation;
   knowledge_used: boolean;
   agent: PublicAgent;
   message: Message;
@@ -719,6 +751,7 @@ export interface DashboardChatStatus {
 export interface DashboardChatResponse {
   reply: string;
   citations: KnowledgeCitation[];
+  citation_validation?: CitationValidation;
   model?: string | null;
   knowledge_used: boolean;
   knowledge_unavailable?: boolean;
