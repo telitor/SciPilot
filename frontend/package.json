@@ -8,7 +8,8 @@
   },
   "scripts": {
     "dev": "node ./node_modules/vite/bin/vite.js",
-    "build": "tsc && node ./node_modules/vite/bin/vite.js build",
+    "build": "tsc && node ./node_modules/vite/bin/vite.js build && node ./scripts/verify-bundle.mjs",
+    "verify:bundle": "node ./scripts/verify-bundle.mjs",
     "preview": "node ./node_modules/vite/bin/vite.js preview",
     "test:e2e": "node ./scripts/run-e2e.mjs",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",

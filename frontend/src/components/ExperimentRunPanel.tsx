@@ -34,6 +34,9 @@ export default function ExperimentRunPanel({
   const [command, setCommand] = useState('');
   const [runtime, setRuntime] = useState('');
   const [operatingSystem, setOperatingSystem] = useState('');
+  const [dockerImage, setDockerImage] = useState('');
+  const [datasetIds, setDatasetIds] = useState('');
+  const [gpuDevices, setGpuDevices] = useState('');
   const [notes, setNotes] = useState('');
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState('0');
@@ -100,6 +103,20 @@ export default function ExperimentRunPanel({
         environment: {
           ...(operatingSystem.trim() ? { os: operatingSystem.trim() } : {}),
           ...(runtime.trim() ? { runtime: runtime.trim() } : {}),
+          ...(executionMode === 'sandboxed-docker' && dockerImage.trim()
+            ? { image: dockerImage.trim() }
+            : {}),
+          ...(executionMode === 'sandboxed-docker' && datasetIds.trim()
+            ? {
+                datasets: datasetIds
+                  .split(/[,\n]/)
+                  .map((item) => item.trim())
+                  .filter(Boolean),
+              }
+            : {}),
+          ...(executionMode === 'sandboxed-docker' && gpuDevices.trim()
+            ? { gpu: gpuDevices.trim() }
+            : {}),
         },
         notes: notes.trim() || undefined,
       });
@@ -113,6 +130,9 @@ export default function ExperimentRunPanel({
       setCommand('');
       setRuntime('');
       setOperatingSystem('');
+      setDockerImage('');
+      setDatasetIds('');
+      setGpuDevices('');
       setNotes('');
       setExecutionApproved(false);
       addNotification({
@@ -224,6 +244,22 @@ export default function ExperimentRunPanel({
           运行环境
           <input className="sci-input mt-1 w-full" value={runtime} onChange={(event) => setRuntime(event.target.value)} placeholder="例如 Python 3.11 / CUDA 12.1" />
         </label>
+        {executionMode === 'sandboxed-docker' && (
+          <>
+            <label className="text-xs text-sci-muted">
+              白名单镜像（可选）
+              <input className="sci-input mt-1 w-full font-mono" value={dockerImage} onChange={(event) => setDockerImage(event.target.value)} placeholder="默认使用管理员配置的镜像" />
+            </label>
+            <label className="text-xs text-sci-muted">
+              只读数据集 ID（可选）
+              <input className="sci-input mt-1 w-full font-mono" value={datasetIds} onChange={(event) => setDatasetIds(event.target.value)} placeholder="例如 mnist-v1, benchmark-2026" />
+            </label>
+            <label className="text-xs text-sci-muted md:col-span-2">
+              GPU 设备（可选）
+              <input className="sci-input mt-1 w-full font-mono" value={gpuDevices} onChange={(event) => setGpuDevices(event.target.value)} placeholder="例如 all 或 0,1；需管理员启用" />
+            </label>
+          </>
+        )}
       </div>
       <label className="mt-3 block text-xs text-sci-muted">
         备注
@@ -237,7 +273,7 @@ export default function ExperimentRunPanel({
             onChange={(event) => setExecutionApproved(event.target.checked)}
             className="mt-0.5"
           />
-          <span>我已检查并批准该命令。依赖准备阶段可访问网络，正式运行阶段将关闭网络并限制 CPU、内存、进程数和执行时间。</span>
+          <span>我已检查并批准该命令。依赖准备阶段可访问网络；正式运行阶段关闭网络，并强制镜像/数据集白名单、CPU、内存、磁盘、进程数和执行时间限制。GPU 请求会进入受控队列。</span>
         </label>
       )}
       <div className="mt-3 flex justify-end">

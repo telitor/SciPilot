@@ -52,3 +52,4 @@ Thumbs.db
 # Local tooling and generated work
 .repo-sync/
 work/
+deploy/.state/

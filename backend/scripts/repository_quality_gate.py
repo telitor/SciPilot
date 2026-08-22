@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS = ROOT / "supabase" / "migrations"
 ALLOWED_ENV_FILES = {
     "backend/.env.example",
+    "deploy/.env.example",
     "frontend/.env.example",
     "KnowledgeBase/api-java-demo/chatdoc-api-java-demo/.env.example",
     "KnowledgeBase/api-python-demo/chatdoc-api-python-demo/.env.example",
@@ -99,6 +100,7 @@ def check_secrets(files: list[Path]) -> list[str]:
 def check_migrations() -> list[str]:
     failures: list[str] = []
     seen_versions: dict[str, str] = {}
+    migration_contents: list[tuple[Path, str]] = []
     migrations = sorted(MIGRATIONS.glob("*.sql"))
     if not migrations:
         return ["no Supabase migrations found"]
@@ -115,10 +117,50 @@ def check_migrations() -> list[str]:
             )
         seen_versions[version] = path.name
         content = path.read_text(encoding="utf-8").strip()
+        migration_contents.append((path, content))
         if not content:
             failures.append(f"empty migration: {path.name}")
         if re.search(r"disable\s+row\s+level\s+security", content, re.IGNORECASE):
             failures.append(f"migration disables RLS: {path.name}")
+
+        for match in re.finditer(r"security\s+definer", content, re.IGNORECASE):
+            function_header_end = content.find("as $$", match.end())
+            header = content[match.start() : function_header_end]
+            if function_header_end < 0 or not re.search(
+                r"set\s+search_path\s*=", header, re.IGNORECASE
+            ):
+                failures.append(
+                    f"SECURITY DEFINER function lacks a fixed search_path: {path.name}"
+                )
+
+    legacy_versions = sorted(
+        int(version) for version in seen_versions if re.fullmatch(r"\d{3}", version)
+    )
+    if legacy_versions:
+        missing = sorted(set(range(1, max(legacy_versions) + 1)) - set(legacy_versions))
+        if missing:
+            failures.append(
+                "legacy migration history has gaps: "
+                + ", ".join(f"{version:03d}" for version in missing)
+            )
+
+    combined_sql = "\n".join(content for _, content in migration_contents)
+    public_tables = set(
+        re.findall(
+            r"create\s+table\s+(?:if\s+not\s+exists\s+)?public\.([a-z0-9_]+)",
+            combined_sql,
+            re.IGNORECASE,
+        )
+    )
+    rls_tables = set(
+        re.findall(
+            r"alter\s+table\s+public\.([a-z0-9_]+)\s+enable\s+row\s+level\s+security",
+            combined_sql,
+            re.IGNORECASE,
+        )
+    )
+    for table in sorted(public_tables - rls_tables):
+        failures.append(f"public table never enables RLS: {table}")
     return failures
 
 

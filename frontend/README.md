@@ -23,5 +23,7 @@ npm run lint
 npm run build
 ```
 
+`npm run build` 会在生产构建后执行 bundle 预算检查：路由页面按需加载，结果图表拆分为独立的 ECharts Core、渲染器和 React 适配层，图表资源不会进入初始 HTML，且任一 JavaScript chunk 不得超过 500 kB。已有 `dist/` 也可用 `npm run verify:bundle` 单独复核。
+
 完整依赖、外部服务、Python/Node/Go 环境说明见
 [`../docs/FRONTEND_TECH_DEPENDENCIES.md`](../docs/FRONTEND_TECH_DEPENDENCIES.md)。

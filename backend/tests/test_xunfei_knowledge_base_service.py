@@ -14,6 +14,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services import xunfei_knowledge_base_service as service
+from services.external_service_reliability import reset_external_service_runtime_state
 
 
 class _FakeResponse:
@@ -58,6 +59,7 @@ class _QueueSession:
 
 class XunfeiKnowledgeBaseServiceTests(unittest.TestCase):
     def setUp(self):
+        reset_external_service_runtime_state()
         self.settings = service.XunfeiKnowledgeBaseSettings(
             app_id="app-test",
             api_secret="secret-test",
@@ -519,6 +521,52 @@ class XunfeiKnowledgeBaseServiceTests(unittest.TestCase):
 
         self.assertNotIn(leaked_secret, str(caught.exception))
         self.assertIn("暂时不可用", str(caught.exception))
+
+    def test_retry_safe_search_recovers_and_reports_attempts(self):
+        recovered = _FakeResponse(payload={"code": 0, "data": []})
+        session = _QueueSession(
+            requests.ConnectionError("transport-secret"),
+            recovered,
+        )
+        settings = service.XunfeiKnowledgeBaseSettings(
+            app_id="app-test",
+            api_secret="secret-test",
+            repo_id="repo-test",
+            max_attempts=2,
+            backoff_initial_seconds=0,
+        )
+        client = service.XunfeiKnowledgeBaseClient(settings, session=session)
+
+        citations = client.vector_search("question", 3)
+
+        self.assertEqual(citations, [])
+        self.assertEqual(len(session.calls), 2)
+        runtime = client.runtime_summary()
+        self.assertEqual(runtime["attempts"], 2)
+        self.assertEqual(runtime["retries"], 1)
+        self.assertTrue(runtime["degraded"])
+        self.assertNotIn("transport-secret", str(runtime))
+
+    def test_upload_timeout_is_not_replayed_without_idempotency_key(self):
+        session = _QueueSession(
+            requests.Timeout("upload-secret"),
+            _FakeResponse(payload={"code": 0, "data": {"fileId": "duplicate"}}),
+        )
+        settings = service.XunfeiKnowledgeBaseSettings(
+            app_id="app-test",
+            api_secret="secret-test",
+            repo_id="repo-test",
+            max_attempts=3,
+            backoff_initial_seconds=0,
+        )
+        client = service.XunfeiKnowledgeBaseClient(settings, session=session)
+
+        with self.assertRaises(service.XunfeiKnowledgeBaseError) as caught:
+            client.upload_file("paper.pdf", b"%PDF-test")
+
+        self.assertEqual(len(session.calls), 1)
+        self.assertEqual(caught.exception.attempts, 1)
+        self.assertNotIn("upload-secret", str(caught.exception))
 
     def test_provider_error_frame_is_sanitized(self):
         response = _FakeResponse(

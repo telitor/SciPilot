@@ -257,6 +257,9 @@ class EvaluationRunResponse(BaseModel):
     passed_count: int = Field(default=0, ge=0)
     failed_count: int = Field(default=0, ge=0)
     metrics: dict[str, Any] = Field(default_factory=dict)
+    suite_slug: Optional[str] = None
+    suite_version: Optional[int] = Field(default=None, ge=1)
+    comparison: dict[str, Any] = Field(default_factory=dict)
     error_message: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
@@ -725,6 +728,7 @@ class DashboardChatResponse(BaseModel):
     model: Optional[str] = None
     knowledge_used: bool
     knowledge_unavailable: bool = False
+    degradation_hint: Optional[str] = None
     conversation_id: Optional[str] = None
     message_id: Optional[str] = None
     persistence_unavailable: bool = False

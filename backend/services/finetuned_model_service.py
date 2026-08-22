@@ -9,15 +9,22 @@ import os
 from pathlib import Path
 from typing import Mapping, Sequence
 
+import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
 
 from services.ai_metrics_service import build_usage_metadata
+from services.external_service_reliability import (
+    external_service_runtime_snapshot,
+    load_external_service_policy,
+    run_external_call,
+)
 
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 DEFAULT_BASE_URL = "https://maas-api.cn-huabei-1.xf-yun.com/v2"
+RELIABILITY_PROVIDER = "xunfei-maas"
 _REQUIRED_SETTINGS = (
     "SCIPILOT_LLM_API_KEY",
     "SCIPILOT_LLM_MODEL_ID",
@@ -41,13 +48,23 @@ def model_service_status() -> dict[str, object]:
     """Return a public, secret-free status payload for frontend health badges."""
 
     available = is_finetuned_model_configured()
+    reliability = external_service_runtime_snapshot(RELIABILITY_PROVIDER)
+    circuit_state = str((reliability.get("circuit") or {}).get("state") or "closed")
     return {
         "available": available,
         "fine_tuned": available and is_lora_resource_configured(),
         "model": os.getenv("SCIPILOT_LLM_MODEL_ID", "").strip() or None,
-        "provider": "xunfei-maas",
+        "provider": RELIABILITY_PROVIDER,
         "transport": "http",
-        "reason": None if available else "模型服务尚未完成后端配置",
+        "reason": (
+            "模型服务连续失败，正在短暂冷却，请稍后重试"
+            if available and circuit_state != "closed"
+            else None
+            if available
+            else "模型服务尚未完成后端配置"
+        ),
+        "degraded": available and circuit_state != "closed",
+        "reliability": reliability,
     }
 
 
@@ -135,11 +152,21 @@ def call_finetuned_model_with_metadata(
     resource_id = os.getenv("SCIPILOT_LLM_RESOURCE_ID", "").strip()
     base_url = os.getenv("SCIPILOT_LLM_BASE_URL", DEFAULT_BASE_URL).strip()
     base_url = (base_url or DEFAULT_BASE_URL).rstrip("/") + "/"
+    policy = load_external_service_policy(
+        "SCIPILOT_LLM",
+        default_connect_timeout_seconds=10.0,
+        default_read_timeout_seconds=120.0,
+        read_timeout_aliases=("SCIPILOT_LLM_TIMEOUT_SECONDS",),
+    )
 
     client = OpenAI(
         api_key=api_key,
         base_url=base_url,
-        timeout=float(os.getenv("SCIPILOT_LLM_TIMEOUT_SECONDS", "120")),
+        timeout=httpx.Timeout(
+            timeout=policy.read_timeout_seconds,
+            connect=policy.connect_timeout_seconds,
+        ),
+        max_retries=0,
     )
     request: dict[str, object] = {
         "model": model_id,
@@ -157,23 +184,40 @@ def call_finetuned_model_with_metadata(
     }
     if resource_id:
         request["extra_headers"] = {"lora_id": resource_id}
-    response = client.chat.completions.create(**request)
 
-    if not response.choices:
-        raise RuntimeError("Fine-tuned model returned no choices")
+    def _call_once() -> tuple[object, str]:
+        response = client.chat.completions.create(**request)
+        if not response.choices:
+            raise RuntimeError("Fine-tuned model returned no choices")
+        reply = _response_content(response.choices[0].message.content)
+        if not reply:
+            raise RuntimeError("Fine-tuned model returned empty reply")
+        return response, reply
 
-    reply = _response_content(response.choices[0].message.content)
-    if not reply:
-        raise RuntimeError("Fine-tuned model returned empty reply")
+    run = run_external_call(
+        provider=RELIABILITY_PROVIDER,
+        operation="chat-completion",
+        display_name="对话模型",
+        policy=policy,
+        call=_call_once,
+        # A timeout can arrive after the provider accepted and billed a
+        # generation. Without an idempotency key, replaying is quota-unsafe.
+        allow_retry=False,
+        default_retryable=False,
+    )
+    response, reply = run.value
     input_text = "\n".join(item["content"] for item in request_messages)
+    usage = build_usage_metadata(
+        input_text=input_text,
+        output_text=reply,
+        provider_usage=getattr(response, "usage", None),
+        price_prefix="SCIPILOT_LLM",
+    )
+    usage["external_run"] = run.summary
     return {
         "text": reply,
-        "usage": build_usage_metadata(
-            input_text=input_text,
-            output_text=reply,
-            provider_usage=getattr(response, "usage", None),
-            price_prefix="SCIPILOT_LLM",
-        ),
+        "usage": usage,
+        "runtime": run.summary,
     }
 
 

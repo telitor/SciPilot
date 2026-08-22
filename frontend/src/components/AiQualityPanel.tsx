@@ -10,6 +10,10 @@ function percent(value: unknown): string {
   return `${Math.round(number * 100)}%`;
 }
 
+function signedPercent(value: number): string {
+  return `${value >= 0 ? '+' : ''}${Math.round(value * 100)}%`;
+}
+
 function AiQualityPanel() {
   const { addNotification } = useUIStore();
   const [feedback, setFeedback] = useState<AdminMessageFeedback[]>([]);
@@ -66,6 +70,7 @@ function AiQualityPanel() {
       const response = await adminQualityAPI.runOfflineEvaluation(suite.slug);
       setRuns((current) => [response.data, ...current.filter((item) => item.id !== response.data.id)]);
       addNotification({ type: 'success', message: '离线评测已完成，没有调用真实模型', duration: 4000 });
+      await load();
     } catch (error) {
       addNotification({ type: 'error', message: getApiErrorMessage(error, '离线评测失败'), duration: 5000 });
     } finally {
@@ -221,8 +226,19 @@ function AiQualityPanel() {
             {runs.map((run) => (
               <div key={run.id} className="grid gap-2 py-4 text-sm md:grid-cols-[1fr_auto_auto_auto] md:items-center">
                 <div>
-                  <p className="font-medium">{run.provider || '离线评测'}</p>
+                  <p className="font-medium">
+                    {run.provider || '离线评测'}
+                    {run.suite_version ? ` · 数据集 v${run.suite_version}` : ''}
+                  </p>
                   <p className="text-sci-muted">{run.started_at ? new Date(run.started_at).toLocaleString('zh-CN') : '时间未知'}</p>
+                  {run.comparison?.previous_run_id && (
+                    <p className="mt-1 text-xs text-sci-muted">
+                      较上次：
+                      {run.mode === 'real-model'
+                        ? `通过率 ${signedPercent(Number(run.comparison.deltas?.pass_rate ?? 0))} · P95 ${Number(run.comparison.deltas?.p95_latency_ms ?? 0) >= 0 ? '+' : ''}${Math.round(Number(run.comparison.deltas?.p95_latency_ms ?? 0))} ms · 成本 ${Number(run.comparison.deltas?.estimated_cost_cny ?? 0) >= 0 ? '+' : ''}¥${Number(run.comparison.deltas?.estimated_cost_cny ?? 0).toFixed(4)}`
+                        : `Recall@3 ${signedPercent(Number(run.comparison.deltas?.recall_at_3 ?? 0))} · MRR ${signedPercent(Number(run.comparison.deltas?.mrr ?? 0))}`}
+                    </p>
+                  )}
                 </div>
                 <span>{run.passed_count}/{run.case_count} 通过</span>
                 <span>{run.mode === 'real-model' ? `通过率 ${percent(run.metrics.pass_rate)}` : `Recall@3 ${percent(run.metrics.recall_at_3)}`}</span>

@@ -356,6 +356,10 @@ npm run dev -- --host 127.0.0.1 --port 5173
 > [!IMPORTANT]
 > 在首次启动前，需要按文件名顺序执行 `supabase/migrations` 目录中现存的 SQL 文件，并在 `backend/.env` 填入 Supabase 配置。真实 `.env` 不得提交到仓库。
 
+### Production containers
+
+生产基线提供非 root 前后端镜像、Docker Compose、Nginx 反向代理、配置预检、健康验证、日志轮转和可验证回滚。请按 [`deploy/README.md`](deploy/README.md) 执行；不要把本地开发启动方式直接用于生产。
+
 <details>
 <summary><strong>查看后端配置清单</strong></summary>
 
@@ -439,19 +443,35 @@ SciPilot/
 
 ### Documentation
 
-- [`docs/SCIPILOT_MATURITY_AND_CLOSURE_GAP_REPORT.md`](docs/SCIPILOT_MATURITY_AND_CLOSURE_GAP_REPORT.md)
+**当前交接与验收口径（2026-08-14）**
+
+- [`SciPilot_近期工作交接报告_2026-08-14.docx`](SciPilot_近期工作交接报告_2026-08-14.docx) — 当前任务、风险和验证基线。
+
+**持续维护的工程参考**
+
 - [`docs/BACKEND_TECH_STACK_AND_DEPENDENCIES.md`](docs/BACKEND_TECH_STACK_AND_DEPENDENCIES.md)
 - [`docs/DATABASE_GUIDE.md`](docs/DATABASE_GUIDE.md)
 - [`docs/FRONTEND_TECH_DEPENDENCIES.md`](docs/FRONTEND_TECH_DEPENDENCIES.md)
+- [`docs/EXTERNAL_SERVICE_RELIABILITY.md`](docs/EXTERNAL_SERVICE_RELIABILITY.md)
+- [`docs/PDF_OCR_AND_EXPERIMENT_SANDBOX.md`](docs/PDF_OCR_AND_EXPERIMENT_SANDBOX.md)
+- [`docs/QUALITY_EVALUATION_AND_REAL_SMOKE.md`](docs/QUALITY_EVALUATION_AND_REAL_SMOKE.md)
+- [`docs/SUPABASE_MIGRATION_AND_DATABASE_AUDIT.md`](docs/SUPABASE_MIGRATION_AND_DATABASE_AUDIT.md)
+- [`deploy/README.md`](deploy/README.md)
 - [`KnowledgeBase/星火知识库后端接入说明.md`](KnowledgeBase/星火知识库后端接入说明.md)
 - [`模型微调/SciPilot微调大模型HTTP调用说明.md`](模型微调/SciPilot微调大模型HTTP调用说明.md)
+
+**历史快照（已退出当前验收口径）**
+
+- [`docs/SCIPILOT_MATURITY_AND_CLOSURE_GAP_REPORT.md`](docs/SCIPILOT_MATURITY_AND_CLOSURE_GAP_REPORT.md) — 评估基线 2026-07-31，2026-08-14 废止；其中成熟度百分比和缺口结论不代表当前实现。
+- [`docs/SciPilot_近期开发进度与闭环报告_2026-08-09.docx`](docs/SciPilot_近期开发进度与闭环报告_2026-08-09.docx) — 2026-08-09 阶段快照，2026-08-14 归档。
+- [`docs/GITHUB_UPDATE_CHECKLIST.md`](docs/GITHUB_UPDATE_CHECKLIST.md) — 早期 MaaS/ChatDoc 单次版本发布清单，非当前整仓验收清单。
 
 <details>
 <summary><strong>Current engineering scope</strong></summary>
 
-SciPilot 当前是工程预览版。项目已经具备完整研究主线、专业 Agent、后台任务、版本审核、项目记忆、运行观测和离线质量评估。
+截至 2026-08-14，SciPilot 仍是工程预览版。项目已经具备完整研究主线、专业 Agent、后台任务、版本审核、项目记忆、运行观测和离线质量评估。当前完成状态与剩余事项以同日交接报告和可重复执行的质量检查为准，不沿用历史成熟度报告中的百分比。
 
-下一阶段重点不是继续堆叠孤立页面，而是完善管理员质量运营、外部知识库稳定性、真实模型版本回归、复杂 PDF 解析、受控执行镜像覆盖、生产配额与告警，以及团队协作权限。
+本轮已补齐生产容器与回滚基线、外部服务统一重试/熔断/降级、PDF OCR 与页坐标、受控执行资源策略、真实服务低频冒烟、质量版本趋势、前端图表分包和迁移历史审计。仍需由环境所有者完成的动作是填写生产密钥、执行远端 Supabase 只读审计、配置告警接收端，并在独立 worker 主机上决定是否启用 Docker/GPU 执行。
 
 </details>
 

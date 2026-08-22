@@ -8,6 +8,15 @@ from services.xunfei_knowledge_base_service import (
 )
 
 
+_TREND_METRICS = (
+    "pass_rate",
+    "recall_at_3",
+    "mrr",
+    "p95_latency_ms",
+    "estimated_cost_cny",
+)
+
+
 def _citation(row: list[Any]) -> dict[str, Any]:
     chunk_id, title, excerpt, score = row
     document_id, _, chunk_index = str(chunk_id).partition(":")
@@ -104,3 +113,67 @@ def evaluate_rag_retrieval_cases(
         "metrics": metrics,
         "results": results,
     }
+
+
+def attach_evaluation_trends(
+    rows: list[dict[str, Any]],
+    suite_metadata: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach a privacy-safe comparison with the preceding run of each suite.
+
+    ``rows`` must be newest first. Suites are compared by stable slug so a new
+    dataset version can be measured against the preceding version as well.
+    """
+
+    enriched: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        suite = suite_metadata.get(str(row.get("suite_id") or ""), {})
+        slug = str(suite.get("slug") or "")
+        version = suite.get("version")
+        current = {
+            **row,
+            "suite_slug": slug or None,
+            "suite_version": version,
+            "comparison": {},
+        }
+        previous = next(
+            (
+                candidate
+                for candidate in rows[index + 1 :]
+                if candidate.get("mode") == row.get("mode")
+                and str(
+                    suite_metadata.get(
+                        str(candidate.get("suite_id") or ""), {}
+                    ).get("slug")
+                    or ""
+                )
+                == slug
+                and candidate.get("status") == "completed"
+            ),
+            None,
+        )
+        if previous is not None and slug:
+            current_metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
+            previous_metrics = (
+                previous.get("metrics")
+                if isinstance(previous.get("metrics"), dict)
+                else {}
+            )
+            deltas: dict[str, float] = {}
+            for metric in _TREND_METRICS:
+                current_value = current_metrics.get(metric)
+                previous_value = previous_metrics.get(metric)
+                if isinstance(current_value, (int, float)) and isinstance(
+                    previous_value, (int, float)
+                ):
+                    deltas[metric] = round(float(current_value) - float(previous_value), 6)
+            previous_suite = suite_metadata.get(
+                str(previous.get("suite_id") or ""), {}
+            )
+            current["comparison"] = {
+                "previous_run_id": previous.get("id"),
+                "previous_suite_version": previous_suite.get("version"),
+                "deltas": deltas,
+            }
+        enriched.append(current)
+    return enriched

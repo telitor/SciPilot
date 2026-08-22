@@ -202,6 +202,13 @@ export interface EvaluationRun {
   passed_count: number;
   failed_count: number;
   metrics: Record<string, number>;
+  suite_slug?: string | null;
+  suite_version?: number | null;
+  comparison?: {
+    previous_run_id?: string | null;
+    previous_suite_version?: number | null;
+    deltas?: Record<string, number>;
+  };
   error_message?: string | null;
   started_at?: string | null;
   completed_at?: string | null;

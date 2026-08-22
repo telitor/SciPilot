@@ -28,10 +28,42 @@ export default defineConfig({
     sourcemap: true,
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          charts: ['echarts', 'echarts-for-react'],
-          markdown: ['react-markdown', 'remark-gfm', 'rehype-highlight', 'rehype-katex', 'remark-math'],
+        manualChunks(id) {
+          const normalizedId = id.replaceAll('\\', '/');
+
+          if (normalizedId.includes('/node_modules/zrender/')) {
+            return 'echarts-renderer';
+          }
+
+          if (normalizedId.includes('/node_modules/echarts/')) {
+            return 'echarts-core';
+          }
+
+          if (
+            normalizedId.includes('/node_modules/echarts-for-react/')
+            || normalizedId.includes('/node_modules/size-sensor/')
+          ) {
+            return 'echarts-react';
+          }
+
+          if (
+            normalizedId.includes('/node_modules/react/')
+            || normalizedId.includes('/node_modules/react-dom/')
+            || normalizedId.includes('/node_modules/react-router/')
+            || normalizedId.includes('/node_modules/react-router-dom/')
+            || normalizedId.includes('/node_modules/scheduler/')
+          ) {
+            return 'vendor';
+          }
+
+          if (
+            normalizedId.includes('/node_modules/react-markdown/')
+            || normalizedId.includes('/node_modules/remark-')
+            || normalizedId.includes('/node_modules/rehype-')
+            || normalizedId.includes('/node_modules/katex/')
+          ) {
+            return 'markdown';
+          }
         },
       },
     },

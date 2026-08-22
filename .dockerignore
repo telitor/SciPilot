@@ -1,0 +1,36 @@
+.git
+.github
+.codex*
+.agents
+
+# Local configuration and credentials must never enter an image layer.
+**/.env
+**/.env.*
+*.pem
+*.key
+
+# Developer and generated state.
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.venv*
+backend/tests
+**/node_modules
+**/dist
+**/build
+**/playwright-report
+**/test-results
+*.log
+
+# Large research inputs and material that is not needed at runtime.
+KnowledgeBase
+Agent
+docs
+supabase
+模型微调
+*.docx
+*.pdf
+
+# Deployment-local secrets and release state.
+deploy/.env
+deploy/.state

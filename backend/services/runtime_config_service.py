@@ -6,6 +6,10 @@ import os
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from services.external_service_reliability import (
+    external_reliability_configuration_warnings,
+)
+
 
 PLACEHOLDER_MARKERS = (
     "your_",
@@ -44,6 +48,29 @@ def _valid_url(value: str, schemes: set[str]) -> bool:
     return parsed.scheme in schemes and bool(parsed.netloc)
 
 
+def _valid_secure_endpoint(
+    value: str,
+    scheme: str,
+    *,
+    origin_only: bool = False,
+) -> bool:
+    parsed = urlparse(value)
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == scheme
+        and bool(parsed.hostname)
+        and not parsed.username
+        and not parsed.password
+        and (port is None or 1 <= port <= 65535)
+        and (not origin_only or parsed.path in {"", "/"})
+        and not parsed.fragment
+        and (not origin_only or (not parsed.params and not parsed.query))
+    )
+
+
 def inspect_runtime_configuration() -> RuntimeConfigReport:
     errors: list[str] = []
     warnings: list[str] = []
@@ -61,6 +88,10 @@ def inspect_runtime_configuration() -> RuntimeConfigReport:
             supabase_url, {"http", "https"}
         ):
             errors.append("SUPABASE_URL is missing, placeholder, or invalid")
+        elif runtime == "production" and not _valid_secure_endpoint(
+            supabase_url, "https", origin_only=True
+        ):
+            errors.append("SUPABASE_URL must be an origin-only HTTPS URL in production")
         if not _configured(publishable):
             errors.append("Supabase publishable/anon key is missing or still a placeholder")
         if not _configured(secret):
@@ -76,6 +107,30 @@ def inspect_runtime_configuration() -> RuntimeConfigReport:
     origins = [item.strip() for item in os.getenv("CORS_ORIGINS", "").split(",")]
     if "*" in origins:
         errors.append("CORS_ORIGINS must not contain a wildcard")
+
+    if runtime == "production":
+        for name in ("SCIPILOT_LLM_BASE_URL", "XFYUN_KB_BASE_URL"):
+            endpoint = _value(name)
+            if endpoint and not _valid_secure_endpoint(endpoint, "https"):
+                errors.append(f"{name} must be an absolute HTTPS URL in production")
+
+        for name in (
+            "PROBLEM_DECOMPOSITION_WS_URL",
+            "PROJECT_PLANNING_WS_URL",
+            "RESULT_INTERPRETATION_WS_URL",
+            "CODE_REPRODUCTION_WS_URL",
+        ):
+            endpoint = _value(name)
+            if endpoint and not _valid_secure_endpoint(endpoint, "wss"):
+                errors.append(f"{name} must be an absolute WSS URL in production")
+
+        paper_agent_path = _value("XF_AGENT_WS_PATH")
+        if paper_agent_path.lower().startswith(
+            ("ws://", "wss://")
+        ) and not _valid_secure_endpoint(paper_agent_path, "wss"):
+            errors.append(
+                "XF_AGENT_WS_PATH must use WSS when configured as an absolute URL"
+            )
 
     optional_groups = {
         "dashboard MaaS": (
@@ -98,5 +153,7 @@ def inspect_runtime_configuration() -> RuntimeConfigReport:
         states = [_configured(_value(*field)) for field in fields]
         if any(states) and not all(states):
             warnings.append(f"{label} configuration is incomplete")
+
+    warnings.extend(external_reliability_configuration_warnings())
 
     return RuntimeConfigReport(tuple(errors), tuple(warnings))

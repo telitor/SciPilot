@@ -203,6 +203,7 @@ class DashboardChatRouteTests(unittest.TestCase):
         fake_database = MagicMock()
         fake_database.table.return_value = query
         with (
+            patch.object(routes, "local_demo_mode_enabled", return_value=False),
             patch.object(
                 routes,
                 "require_owned_row",

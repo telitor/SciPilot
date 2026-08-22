@@ -1,0 +1,47 @@
+name: SciPilot Real Provider Smoke
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      confirm_external_calls:
+        description: "I understand this run consumes a small amount of provider quota"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scipilot-real-provider-smoke
+  cancel-in-progress: false
+
+jobs:
+  deployed-smoke:
+    if: >-
+      (github.event_name == 'schedule' && vars.SCIPILOT_REAL_SMOKE_ENABLED == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.confirm_external_calls)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify smoke credentials
+        env:
+          SCIPILOT_SMOKE_BASE_URL: ${{ secrets.SCIPILOT_SMOKE_BASE_URL }}
+          SCIPILOT_SMOKE_EMAIL: ${{ secrets.SCIPILOT_SMOKE_EMAIL }}
+          SCIPILOT_SMOKE_PASSWORD: ${{ secrets.SCIPILOT_SMOKE_PASSWORD }}
+        run: |
+          test -n "$SCIPILOT_SMOKE_BASE_URL"
+          test -n "$SCIPILOT_SMOKE_EMAIL"
+          test -n "$SCIPILOT_SMOKE_PASSWORD"
+      - name: Run bounded deployed-provider suite
+        env:
+          SCIPILOT_SMOKE_BASE_URL: ${{ secrets.SCIPILOT_SMOKE_BASE_URL }}
+          SCIPILOT_SMOKE_EMAIL: ${{ secrets.SCIPILOT_SMOKE_EMAIL }}
+          SCIPILOT_SMOKE_PASSWORD: ${{ secrets.SCIPILOT_SMOKE_PASSWORD }}
+        run: python backend/scripts/run_deployed_provider_smoke.py --confirm-external-calls

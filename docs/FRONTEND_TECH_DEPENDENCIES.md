@@ -1,5 +1,8 @@
 # SciPilot 前端技术依赖清单
 
+> 核对日期：2026-08-14
+> 文档状态：当前工程参考；依赖版本以 `frontend/package.json` 与锁文件为准
+
 本文按当前仓库实际代码与 `frontend/package.json` 汇总前端运行环境、第三方库、外部服务和本地命令。版本范围以 `package.json` 为准，精确安装版本以 `frontend/package-lock.json` 为准。
 
 ## 1. 运行环境结论
@@ -7,7 +10,7 @@
 | 环境 | 是否需要 | 建议版本 | 用途 |
 | --- | --- | --- | --- |
 | 浏览器 | 必需 | 当前稳定版 Chrome / Edge / Firefox / Safari | 运行 React 单页应用；需支持 ES2020、Fetch/Promise、`localStorage` 和现代 CSS |
-| Node.js | 前端开发与构建必需 | 18+，推荐当前 LTS | 安装依赖、运行 Vite、TypeScript、ESLint 和构建命令 |
+| Node.js | 前端开发与构建必需 | `>=20 <25` | 安装依赖、运行 Vite、TypeScript、ESLint 和构建命令；与 `package.json#engines` 一致 |
 | npm | 必需（默认包管理器） | 9+ | 仓库提交了 `package-lock.json`，建议使用 `npm ci` 做可复现安装 |
 | Python | 仅启动完整项目时必需 | 3.10+，推荐 3.11 | 运行 FastAPI 后端；前端源码本身不依赖 Python |
 | Go | 不需要 | 无 | 当前前端、后端和知识库工具均没有 Go 模块或 Go 编译步骤 |
@@ -36,8 +39,8 @@
 | `lucide-react` | `^0.344.0` | 页面、导航、状态和对话框图标 |
 | `react-markdown` | `^9.0.1` | 渲染模型回答和知识库答案 |
 | `remark-gfm` | `^4.0.0` | Markdown 表格、任务列表等 GFM 语法 |
-| `echarts` | `^5.5.0` | 实验结果图表引擎 |
-| `echarts-for-react` | `^3.0.2` | ECharts 的 React 封装 |
+| `echarts` | `^5.5.0` | 实验结果图表引擎；仅注册柱状图、折线图及所需组件，并在结果数据出现时懒加载 |
+| `echarts-for-react` | `^3.0.2` | ECharts 的 React Core 封装；不再引入默认全量 ECharts 入口 |
 | `rehype-highlight` | `^7.0.0` | 已安装的 Markdown 代码高亮能力；当前核心对话组件未直接启用 |
 | `rehype-katex` | `^7.0.0` | 已安装的公式渲染能力；当前核心对话组件未直接启用 |
 | `remark-math` | `^6.0.0` | 已安装的 Markdown 数学语法能力；当前核心对话组件未直接启用 |
@@ -128,7 +131,8 @@ npm run preview
 | `npm run type-check` | 执行 `tsc --noEmit` |
 | `npm run lint` | ESLint 检查 TS/TSX，警告也视为失败 |
 | `npm run format` | Prettier 修改 `src` 下 TS/TSX/CSS/JSON |
-| `npm run build` | TypeScript 编译后生成 `frontend/dist/` |
+| `npm run build` | TypeScript 编译、生成 `frontend/dist/`，并自动执行 500 kB JavaScript chunk 预算检查 |
+| `npm run verify:bundle` | 单独复核现有 `dist/`：ECharts 分包必须存在、不得进入初始 HTML、任一 JS chunk 不得超过 500 kB |
 | `npm run preview` | 本地预览 `dist/` |
 
 ### 完整本地联调
@@ -152,5 +156,7 @@ npm run dev
 
 - 应提交：`package.json`、`package-lock.json`、源码、Vite/Tailwind/PostCSS/TypeScript/ESLint 配置和 `.env.example`。
 - 不应提交：`frontend/.env`、`node_modules/`、`dist/`、日志和本机缓存。
+- 所有路由页面均通过 `React.lazy` 按页面加载；结果分析页只有在存在可展示的分析数据时才请求图表组件、ECharts Core 与渲染器分包。
+- `scripts/verify-bundle.mjs` 是构建质量门：会验证 `echarts-core`、`echarts-renderer`、`echarts-react` 和 `ResultChart` 分包，并阻止图表资源回到首屏或任一 JavaScript chunk 超过 500 kB。
 - 生产构建输出包含 source map（见 `vite.config.ts` 的 `sourcemap: true`）。若生产环境不希望公开源码映射，应在部署配置中关闭或限制 `.map` 文件访问。
 - 当前没有 Go、Docker、Electron、Next.js、Vue、D3.js、Neo4j、MongoDB、MinIO 或前端直连 Supabase 依赖；不要仅凭早期规划文档为这些组件准备环境。

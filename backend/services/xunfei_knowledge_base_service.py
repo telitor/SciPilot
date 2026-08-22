@@ -24,6 +24,15 @@ from typing import Any, Iterator, Mapping, Sequence
 import requests
 from dotenv import load_dotenv
 
+from services.external_service_reliability import (
+    ExternalServiceError,
+    ExternalServicePolicy,
+    external_service_runtime_snapshot,
+    load_external_service_policy,
+    run_external_call,
+    summarize_external_runs,
+)
+
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
@@ -98,11 +107,21 @@ class XunfeiKnowledgeBaseError(RuntimeError):
         code: int | str | None = None,
         sid: str | None = None,
         http_status: int | None = None,
+        kind: str = "unavailable",
+        retryable: bool = False,
+        attempts: int = 1,
+        retry_after_seconds: float | None = None,
+        run_summary: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.sid = sid
         self.http_status = http_status
+        self.kind = kind
+        self.retryable = retryable
+        self.attempts = attempts
+        self.retry_after_seconds = retry_after_seconds
+        self.run_summary = dict(run_summary or {})
 
 
 @dataclass(frozen=True)
@@ -112,7 +131,15 @@ class XunfeiKnowledgeBaseSettings:
     repo_id: str
     base_url: str = DEFAULT_BASE_URL
     connect_timeout_seconds: float = 10.0
-    read_timeout_seconds: float = 600.0
+    read_timeout_seconds: float = 120.0
+    # Directly constructed clients default to one attempt, avoiding surprising
+    # duplicate writes in tests/tools. from_env applies the documented shared
+    # retry default to retry-safe read operations.
+    max_attempts: int = 1
+    backoff_initial_seconds: float = 0.25
+    backoff_max_seconds: float = 2.0
+    circuit_failure_threshold: int = 3
+    circuit_cooldown_seconds: float = 30.0
 
     @classmethod
     def from_env(cls) -> "XunfeiKnowledgeBaseSettings":
@@ -132,23 +159,24 @@ class XunfeiKnowledgeBaseSettings:
                 "缺少星火知识库配置：" + ", ".join(missing)
             )
 
-        try:
-            connect_timeout = float(os.getenv("XFYUN_KB_CONNECT_TIMEOUT", "10"))
-            read_timeout = float(os.getenv("XFYUN_KB_READ_TIMEOUT", "600"))
-        except (TypeError, ValueError):
-            raise XunfeiKnowledgeBaseError(
-                "星火知识库超时配置无效，请检查后端环境变量"
-            ) from None
-        if connect_timeout <= 0 or read_timeout <= 0:
-            raise XunfeiKnowledgeBaseError(
-                "星火知识库超时配置必须大于 0"
-            )
+        policy = load_external_service_policy(
+            "XFYUN_KB",
+            default_connect_timeout_seconds=10.0,
+            default_read_timeout_seconds=120.0,
+            connect_timeout_aliases=("XFYUN_KB_CONNECT_TIMEOUT",),
+            read_timeout_aliases=("XFYUN_KB_READ_TIMEOUT",),
+        )
 
         return cls(
             **values,
             base_url=os.getenv("XFYUN_KB_BASE_URL", DEFAULT_BASE_URL).rstrip("/"),
-            connect_timeout_seconds=connect_timeout,
-            read_timeout_seconds=read_timeout,
+            connect_timeout_seconds=policy.connect_timeout_seconds,
+            read_timeout_seconds=policy.read_timeout_seconds,
+            max_attempts=policy.max_attempts,
+            backoff_initial_seconds=policy.backoff_initial_seconds,
+            backoff_max_seconds=policy.backoff_max_seconds,
+            circuit_failure_threshold=policy.circuit_failure_threshold,
+            circuit_cooldown_seconds=policy.circuit_cooldown_seconds,
         )
 
 
@@ -374,10 +402,46 @@ class XunfeiKnowledgeBaseClient:
         self.settings = settings
         self._session = session or requests.Session()
         self._file_names: dict[str, str] = {}
+        self._reliability_policy = ExternalServicePolicy(
+            connect_timeout_seconds=settings.connect_timeout_seconds,
+            read_timeout_seconds=settings.read_timeout_seconds,
+            max_attempts=settings.max_attempts,
+            backoff_initial_seconds=settings.backoff_initial_seconds,
+            backoff_max_seconds=settings.backoff_max_seconds,
+            circuit_failure_threshold=settings.circuit_failure_threshold,
+            circuit_cooldown_seconds=settings.circuit_cooldown_seconds,
+        )
+        self._runtime_runs: list[dict[str, Any]] = []
 
     @classmethod
     def from_env(cls) -> "XunfeiKnowledgeBaseClient":
         return cls(XunfeiKnowledgeBaseSettings.from_env())
+
+    def runtime_summary(self) -> dict[str, Any]:
+        summary = summarize_external_runs(self._runtime_runs)
+        summary["service"] = external_service_runtime_snapshot(PROVIDER_NAME)
+        return summary
+
+    def _record_runtime(self, summary: Mapping[str, Any]) -> None:
+        self._runtime_runs.append(dict(summary))
+        if len(self._runtime_runs) > 20:
+            del self._runtime_runs[:-20]
+
+    @staticmethod
+    def _translated_error(
+        exc: ExternalServiceError,
+    ) -> XunfeiKnowledgeBaseError:
+        return XunfeiKnowledgeBaseError(
+            str(exc),
+            code=exc.provider_code,
+            sid=exc.provider_request_id,
+            http_status=exc.http_status,
+            kind=exc.kind,
+            retryable=exc.retryable,
+            attempts=exc.attempts,
+            retry_after_seconds=exc.retry_after_seconds,
+            run_summary=exc.run_summary,
+        )
 
     @staticmethod
     def make_signature(app_id: str, api_secret: str, timestamp: int | str) -> str:
@@ -504,49 +568,68 @@ class XunfeiKnowledgeBaseClient:
         headers: Mapping[str, str],
         **kwargs: Any,
     ) -> dict[str, Any]:
-        try:
+        static_headers = {
+            name: value
+            for name, value in headers.items()
+            if name not in {"appId", "timeStamp", "signature"}
+        }
+
+        def _call_once() -> dict[str, Any]:
             response = self._session.post(
                 f"{self.settings.base_url}{path}",
-                headers=dict(headers),
+                headers={**self.auth_headers(), **static_headers},
                 timeout=self._timeout,
                 **kwargs,
             )
-        except requests.Timeout:
-            raise XunfeiKnowledgeBaseError(
-                f"星火知识库{operation}超时，请稍后重试"
-            ) from None
-        except requests.RequestException:
-            # requests exception messages can contain a URL, query string, or
-            # echoed request data, so they must not cross this boundary.
-            raise XunfeiKnowledgeBaseError(
-                f"星火知识库{operation}暂时不可用，请稍后重试"
-            ) from None
-
-        try:
-            if not 200 <= response.status_code < 300:
-                raise self._response_error(response, operation=operation)
             try:
-                payload = response.json()
-            except (TypeError, ValueError):
-                raise XunfeiKnowledgeBaseError(
-                    f"星火知识库{operation}返回了无法解析的数据",
-                    http_status=response.status_code,
-                ) from None
-            if not isinstance(payload, dict):
-                raise XunfeiKnowledgeBaseError(
-                    f"星火知识库{operation}返回了无效数据",
-                    http_status=response.status_code,
-                )
-            code = payload.get("code", 0)
-            if code not in (0, "0", None):
-                raise self._payload_error(
-                    payload,
-                    operation=operation,
-                    http_status=response.status_code,
-                )
-            return payload
-        finally:
-            response.close()
+                if not 200 <= response.status_code < 300:
+                    raise self._response_error(response, operation=operation)
+                try:
+                    payload = response.json()
+                except (TypeError, ValueError):
+                    raise XunfeiKnowledgeBaseError(
+                        f"星火知识库{operation}返回了无法解析的数据",
+                        http_status=response.status_code,
+                        kind="invalid_response",
+                    ) from None
+                if not isinstance(payload, dict):
+                    raise XunfeiKnowledgeBaseError(
+                        f"星火知识库{operation}返回了无效数据",
+                        http_status=response.status_code,
+                        kind="invalid_response",
+                    )
+                code = payload.get("code", 0)
+                if code not in (0, "0", None):
+                    raise self._payload_error(
+                        payload,
+                        operation=operation,
+                        http_status=response.status_code,
+                    )
+                return payload
+            finally:
+                response.close()
+
+        # Uploads and deletes are not retried because ChatDoc exposes no
+        # idempotency key. Read/search operations use the finite retry budget.
+        allow_retry = path not in {
+            "/openapi/v1/file/upload",
+            "/openapi/v1/file/del",
+        }
+        try:
+            run = run_external_call(
+                provider=PROVIDER_NAME,
+                operation=operation,
+                display_name=f"星火知识库{operation}",
+                policy=self._reliability_policy,
+                call=_call_once,
+                allow_retry=allow_retry,
+                default_retryable=False,
+            )
+        except ExternalServiceError as exc:
+            self._record_runtime(exc.run_summary)
+            raise self._translated_error(exc) from None
+        self._record_runtime(run.summary)
+        return run.value
 
     @staticmethod
     def _payload_error(
@@ -562,6 +645,8 @@ class XunfeiKnowledgeBaseClient:
             code=code,
             sid=str(payload["sid"]) if payload.get("sid") is not None else None,
             http_status=http_status,
+            kind="invalid_request",
+            retryable=False,
         )
 
     @staticmethod
@@ -578,11 +663,23 @@ class XunfeiKnowledgeBaseClient:
             payload = {}
         code = payload.get("code")
         code_suffix = f"，错误码 {code}" if code is not None else ""
+        retryable = response.status_code in {408, 425, 429} or response.status_code >= 500
+        kind = (
+            "rate_limited"
+            if response.status_code == 429
+            else "unavailable"
+            if retryable
+            else "authentication"
+            if response.status_code in {401, 403}
+            else "invalid_request"
+        )
         return XunfeiKnowledgeBaseError(
             f"星火知识库{operation}失败（HTTP {response.status_code}{code_suffix}）",
             code=code,
             sid=str(payload["sid"]) if payload.get("sid") is not None else None,
             http_status=response.status_code,
+            kind=kind,
+            retryable=retryable,
         )
 
     def build_chat_request(
@@ -616,70 +713,82 @@ class XunfeiKnowledgeBaseClient:
         }
 
     def iter_chat(self, request_body: Mapping[str, Any]) -> Iterator[dict[str, Any]]:
-        headers = {
-            **self.auth_headers(),
-            "Accept": "text/event-stream",
-            "Content-Type": "application/json; charset=utf-8",
-        }
-        try:
+        def _call_once() -> list[dict[str, Any]]:
             response = self._session.post(
                 f"{self.settings.base_url}/openapi/v2/chat",
                 json=dict(request_body),
-                headers=headers,
+                headers={
+                    **self.auth_headers(),
+                    "Accept": "text/event-stream",
+                    "Content-Type": "application/json; charset=utf-8",
+                },
                 timeout=self._timeout,
                 stream=True,
             )
-        except requests.Timeout:
-            raise XunfeiKnowledgeBaseError(
-                "星火知识库问答超时，请稍后重试"
-            ) from None
-        except requests.RequestException:
-            raise XunfeiKnowledgeBaseError(
-                "星火知识库问答暂时不可用，请稍后重试"
-            ) from None
+            frames: list[dict[str, Any]] = []
+            try:
+                if not 200 <= response.status_code < 300:
+                    raise self._response_error(response, operation="问答")
+                response.encoding = "utf-8"
+                for raw_line in response.iter_lines(decode_unicode=True):
+                    if not raw_line:
+                        continue
+                    try:
+                        line = (
+                            raw_line.decode("utf-8")
+                            if isinstance(raw_line, bytes)
+                            else raw_line
+                        ).strip()
+                    except (UnicodeDecodeError, AttributeError):
+                        raise XunfeiKnowledgeBaseError(
+                            "星火知识库问答返回了无法解析的数据帧",
+                            kind="invalid_response",
+                        ) from None
+                    if not line or line.startswith(":") or line.startswith("event:"):
+                        continue
+                    if line.startswith("data:"):
+                        line = line[5:].strip()
+                    if not line or line == "[DONE]":
+                        continue
+                    try:
+                        frame = json.loads(line)
+                    except (TypeError, json.JSONDecodeError):
+                        raise XunfeiKnowledgeBaseError(
+                            "星火知识库问答返回了无法解析的数据帧",
+                            kind="invalid_response",
+                        ) from None
+                    if not isinstance(frame, dict):
+                        raise XunfeiKnowledgeBaseError(
+                            "星火知识库问答返回了无效数据帧",
+                            kind="invalid_response",
+                        )
+                    if frame.get("code", 0) not in (0, "0", None):
+                        raise self._payload_error(
+                            frame,
+                            operation="问答",
+                            http_status=response.status_code,
+                        )
+                    frames.append(frame)
+                return frames
+            finally:
+                response.close()
 
         try:
-            if not 200 <= response.status_code < 300:
-                raise self._response_error(response, operation="问答")
-            response.encoding = "utf-8"
-            for raw_line in response.iter_lines(decode_unicode=True):
-                if not raw_line:
-                    continue
-                try:
-                    line = (
-                        raw_line.decode("utf-8")
-                        if isinstance(raw_line, bytes)
-                        else raw_line
-                    ).strip()
-                except (UnicodeDecodeError, AttributeError):
-                    raise XunfeiKnowledgeBaseError(
-                        "星火知识库问答返回了无法解析的数据帧"
-                    ) from None
-                if not line or line.startswith(":") or line.startswith("event:"):
-                    continue
-                if line.startswith("data:"):
-                    line = line[5:].strip()
-                if not line or line == "[DONE]":
-                    continue
-                try:
-                    frame = json.loads(line)
-                except (TypeError, json.JSONDecodeError):
-                    raise XunfeiKnowledgeBaseError(
-                        "星火知识库问答返回了无法解析的数据帧"
-                    ) from None
-                if not isinstance(frame, dict):
-                    raise XunfeiKnowledgeBaseError(
-                        "星火知识库问答返回了无效数据帧"
-                    )
-                if frame.get("code", 0) not in (0, "0", None):
-                    raise self._payload_error(
-                        frame,
-                        operation="问答",
-                        http_status=response.status_code,
-                    )
-                yield frame
-        finally:
-            response.close()
+            run = run_external_call(
+                provider=PROVIDER_NAME,
+                operation="问答",
+                display_name="星火知识库问答",
+                policy=self._reliability_policy,
+                call=_call_once,
+                # A generated answer has no idempotency key and may consume
+                # quota even when the final frame is lost, so do not replay it.
+                allow_retry=False,
+            )
+        except ExternalServiceError as exc:
+            self._record_runtime(exc.run_summary)
+            raise self._translated_error(exc) from None
+        self._record_runtime(run.summary)
+        yield from run.value
 
     def chat(self, request_body: Mapping[str, Any]) -> XunfeiKnowledgeAnswer:
         result = XunfeiKnowledgeAnswer()
@@ -970,6 +1079,17 @@ def get_xunfei_knowledge_status() -> dict[str, Any]:
         "document_count": 0,
         "vectored_count": 0,
         "files": [],
+        "runtime": {
+            "status": "not-run",
+            "operation_count": 0,
+            "attempts": 0,
+            "retries": 0,
+            "latency_ms": 0,
+            "degraded": False,
+            "degradation_hint": None,
+            "operations": [],
+            "service": external_service_runtime_snapshot(PROVIDER_NAME),
+        },
     }
     if not configured:
         return status
@@ -993,6 +1113,7 @@ def get_xunfei_knowledge_status() -> dict[str, Any]:
             # Expose a useful preview without allowing an unexpectedly large
             # repository to inflate every status response.
             "files": files[:100],
+            "runtime": client.runtime_summary(),
         }
     )
     return status
@@ -1055,6 +1176,8 @@ def retrieve_xunfei_knowledge_base(
         query_results,
         top_n=resolved_top_n,
     )
+    runtime = client.runtime_summary()
+    degraded = degraded or bool(runtime.get("degraded"))
     return {
         "query": queries[0],
         "retrieval_queries": [query for query, _ in query_results],
@@ -1062,6 +1185,8 @@ def retrieve_xunfei_knowledge_base(
         "candidate_count": candidate_count,
         "rerank_mode": "rrf-lexical-v1",
         "degraded": degraded,
+        "degradation_hint": runtime.get("degradation_hint"),
+        "runtime": runtime,
     }
 
 
@@ -1085,6 +1210,7 @@ def upload_xunfei_knowledge_file(
         "sid": str(payload.get("sid") or "").strip() or None,
         "status": "uploaded",
         "repository_id": client.settings.repo_id,
+        "runtime": client.runtime_summary(),
     }
 
 
@@ -1135,4 +1261,5 @@ def ask_xunfei_knowledge_base(
         "citations": _parse_file_references(result.reference_frames),
         "sid": result.sid,
         "reference_frames": result.reference_frames,
+        "runtime": client.runtime_summary(),
     }

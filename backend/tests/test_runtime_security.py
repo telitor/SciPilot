@@ -36,6 +36,63 @@ class RuntimeSecurityTests(unittest.TestCase):
         self.assertTrue(any("wildcard" in item for item in report.errors))
         self.assertTrue(any("LOCAL_DEMO_MODE" in item for item in report.errors))
 
+    def test_invalid_external_reliability_value_is_reported_without_secret(self):
+        env = {
+            "SCIPILOT_ENV": "local",
+            "LOCAL_DEMO_MODE": "true",
+            "LOCAL_DEMO_PASSWORD": "local-only-password",
+            "CORS_ORIGINS": "http://localhost:5173",
+            "SCIPILOT_EXTERNAL_MAX_ATTEMPTS": "100",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            report = inspect_runtime_configuration()
+
+        self.assertTrue(
+            any("SCIPILOT_EXTERNAL_MAX_ATTEMPTS" in item for item in report.warnings)
+        )
+        self.assertNotIn("local-only-password", str(report))
+
+    def test_production_requires_tls_even_when_deploy_cli_is_bypassed(self):
+        env = {
+            "SCIPILOT_ENV": "production",
+            "SUPABASE_URL": "http://supabase.internal",
+            "SUPABASE_ANON_KEY": "ey-anon",
+            "SUPABASE_SERVICE_ROLE_KEY": "ey-service",
+            "CORS_ORIGINS": "https://app.scipilot.internal",
+            "SCIPILOT_LLM_BASE_URL": "http://maas.internal/v2",
+            "XFYUN_KB_BASE_URL": "http://chatdoc.internal",
+            "PROBLEM_DECOMPOSITION_WS_URL": "ws://agent.internal/chat",
+            "XF_AGENT_WS_PATH": "ws://paper-agent.internal/chat",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            report = inspect_runtime_configuration()
+
+        joined = "\n".join(report.errors)
+        self.assertIn("SUPABASE_URL", joined)
+        self.assertIn("SCIPILOT_LLM_BASE_URL", joined)
+        self.assertIn("XFYUN_KB_BASE_URL", joined)
+        self.assertIn("PROBLEM_DECOMPOSITION_WS_URL", joined)
+        self.assertIn("XF_AGENT_WS_PATH", joined)
+
+    def test_local_runtime_can_use_explicit_development_http_endpoints(self):
+        env = {
+            "SCIPILOT_ENV": "local",
+            "LOCAL_DEMO_MODE": "true",
+            "LOCAL_DEMO_PASSWORD": "local-only-password",
+            "CORS_ORIGINS": "http://localhost:5173",
+            "SCIPILOT_LLM_BASE_URL": "http://127.0.0.1:11434/v1",
+            "XFYUN_KB_BASE_URL": "http://127.0.0.1:8081",
+            "PROBLEM_DECOMPOSITION_WS_URL": "ws://127.0.0.1:8082/chat",
+            "XF_AGENT_WS_PATH": "ws://127.0.0.1:8083/chat",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            report = inspect_runtime_configuration()
+
+        self.assertFalse(
+            any("HTTPS URL in production" in item for item in report.errors)
+        )
+        self.assertFalse(any("WSS URL in production" in item for item in report.errors))
+
     def test_high_cost_routes_have_separate_rate_limit_rules(self):
         self.assertEqual(_rule_for("/api/v1/auth/login", "POST").name, "auth")
         self.assertEqual(_rule_for("/api/v1/papers/upload-async", "POST").name, "upload")

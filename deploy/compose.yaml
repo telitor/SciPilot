@@ -1,0 +1,97 @@
+name: scipilot
+
+x-runtime-security: &runtime-security
+  init: true
+  restart: unless-stopped
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  backend:
+    <<: *runtime-security
+    image: scipilot-backend:${SCIPILOT_IMAGE_TAG:-dev}
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        SCIPILOT_INSTALL_OCR: ${SCIPILOT_INSTALL_OCR:-true}
+    env_file:
+      - ${SCIPILOT_ENV_FILE:-.env}
+    command:
+      - python
+      - -m
+      - uvicorn
+      - main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+      - --no-server-header
+      - --log-level
+      - ${SCIPILOT_LOG_LEVEL:-info}
+    expose:
+      - "8000"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json,urllib.request;
+          data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health',timeout=3));
+          raise SystemExit(0 if data.get('status') == 'ok' else 1)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    stop_grace_period: 45s
+    pids_limit: 512
+    mem_limit: ${SCIPILOT_BACKEND_MEMORY:-2g}
+    cpus: ${SCIPILOT_BACKEND_CPUS:-2.0}
+    networks:
+      - app
+
+  frontend:
+    <<: *runtime-security
+    image: scipilot-frontend:${SCIPILOT_IMAGE_TAG:-dev}
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+    depends_on:
+      backend:
+        condition: service_healthy
+        restart: true
+    ports:
+      - "${SCIPILOT_BIND_ADDRESS:-127.0.0.1}:${SCIPILOT_PUBLIC_PORT:-8080}:8080"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    pids_limit: 128
+    mem_limit: ${SCIPILOT_FRONTEND_MEMORY:-128m}
+    cpus: ${SCIPILOT_FRONTEND_CPUS:-0.50}
+    networks:
+      - app
+
+networks:
+  app:
+    driver: bridge
+

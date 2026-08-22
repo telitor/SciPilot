@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import csv
 import hashlib
@@ -111,7 +112,8 @@ from services.finetuned_model_service import (
     call_finetuned_model_with_metadata,
     model_service_status,
 )
-from services.evaluation_service import evaluate_rag_retrieval_cases
+from services.evaluation_service import attach_evaluation_trends, evaluate_rag_retrieval_cases
+from services.external_service_reliability import ExternalServiceError
 from services.llm_service import generate_reply, generate_reply_with_metadata
 from services.pdf_extraction_service import PdfExtractionError, extract_pdf
 from services.knowledge_graph_service import (
@@ -137,8 +139,13 @@ from services.sandbox_execution_service import (
     docker_execution_enabled,
     execute_repository_run,
     parse_approved_command,
+    validate_execution_environment,
 )
-from services.supabase_service import get_supabase_auth_client
+from services.supabase_service import (
+    SupabaseReadinessError,
+    check_supabase_readiness,
+    get_supabase_auth_client,
+)
 from services.xunfei_knowledge_base_service import (
     XunfeiKnowledgeBaseError,
     delete_xunfei_knowledge_file,
@@ -436,6 +443,13 @@ def _supabase_auth_exception(exc: Exception) -> HTTPException:
 
 def _extract_pdf_metadata(content: bytes, fallback_title: str) -> dict[str, Any]:
     return extract_pdf(content, f"{fallback_title}.pdf", max_pages=5, max_chars=10_000)
+
+
+async def _extract_pdf_metadata_nonblocking(
+    content: bytes,
+    fallback_title: str,
+) -> dict[str, Any]:
+    return await asyncio.to_thread(_extract_pdf_metadata, content, fallback_title)
 
 
 def _positive_page(value: Any) -> int | None:
@@ -866,6 +880,23 @@ def _upstream_error(service_name: str) -> HTTPException:
     )
 
 
+def _normalized_external_http_error(
+    exc: Exception,
+    *,
+    fallback_service_name: str,
+    status_code: int = 502,
+) -> HTTPException:
+    """Expose only reliability-layer messages and bounded cooldown metadata."""
+
+    if not isinstance(exc, (ExternalServiceError, XunfeiKnowledgeBaseError)):
+        return _upstream_error(fallback_service_name)
+    retry_after = getattr(exc, "retry_after_seconds", None)
+    headers = None
+    if isinstance(retry_after, (int, float)) and retry_after > 0:
+        headers = {"Retry-After": str(max(1, math.ceil(retry_after)))}
+    return HTTPException(status_code=status_code, detail=str(exc), headers=headers)
+
+
 def _agent_service_exception(category: str, exc: Exception) -> HTTPException:
     message = str(exc)
     logger.warning(
@@ -875,6 +906,12 @@ def _agent_service_exception(category: str, exc: Exception) -> HTTPException:
     )
     if message.startswith("Missing Xunfei config for category:"):
         return HTTPException(status_code=503, detail=message)
+    if isinstance(exc, ExternalServiceError):
+        return _normalized_external_http_error(
+            exc,
+            fallback_service_name="智能体",
+            status_code=504 if exc.kind == "timeout" else 502,
+        )
     if message == "Xunfei agent response timeout":
         return HTTPException(status_code=504, detail="智能体响应超时，请稍后重试")
     return HTTPException(status_code=502, detail="智能体调用失败，请检查后端 Agent 配置")
@@ -923,7 +960,12 @@ def _retrieve_external_knowledge(
             and str(item.get("document_id") or "") in allowed
         ] if isinstance(citations, list) else []
         return retrieval
-    except (XunfeiKnowledgeBaseError, ValueError):
+    except XunfeiKnowledgeBaseError as exc:
+        raise _normalized_external_http_error(
+            exc,
+            fallback_service_name="星火知识库",
+        ) from None
+    except ValueError:
         raise _upstream_error("星火知识库") from None
     except Exception:
         # Never expose provider response bodies, request URLs, or credentials.
@@ -1287,6 +1329,11 @@ def _call_maas(
             ],
             max_tokens=max_tokens,
         )
+    except ExternalServiceError as exc:
+        raise _normalized_external_http_error(
+            exc,
+            fallback_service_name="对话模型",
+        ) from None
     except Exception:
         # The upstream SDK may include request details in exception strings.
         raise _upstream_error("对话模型") from None
@@ -1599,9 +1646,16 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
         (answer.get("citation_validation") or {}).get("status") or "not_applicable"
     )
     citation_failed = citation_status in {"invalid", "unsupported"}
-    degraded = bool(answer.get("retrieval_degraded")) or citation_failed or str(
-        answer.get("response_mode") or ""
-    ).endswith("evidence-only")
+    external_run = (answer.get("usage") or {}).get("external_run")
+    provider_recovered = bool(
+        isinstance(external_run, dict) and external_run.get("degraded")
+    )
+    degraded = (
+        bool(answer.get("retrieval_degraded"))
+        or citation_failed
+        or provider_recovered
+        or str(answer.get("response_mode") or "").endswith("evidence-only")
+    )
     run = _record_ai_run(
         user_id=user_id,
         project_id=str(conversation.get("project_id")) if conversation.get("project_id") else None,
@@ -1620,6 +1674,8 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
             if str(answer.get("response_mode") or "").endswith("evidence-only")
             else "citation-validation-failed"
             if citation_failed
+            else "provider-recovered-after-retry"
+            if provider_recovered
             else None
         ),
         retrieval_count=len(answer.get("citations") or []),
@@ -1645,6 +1701,24 @@ def _chat_reply(conversation: dict[str, Any], content: str, user_id: str) -> dic
 @router.get("/health")
 def health():
     return {"status": "ok", "service": "SciPilot API", "version": "1.0.0"}
+
+
+@router.get("/readiness")
+def readiness():
+    """Check only the bounded core Auth/PostgREST production dependency."""
+
+    try:
+        check_supabase_readiness()
+    except SupabaseReadinessError:
+        raise HTTPException(
+            status_code=503,
+            detail="SciPilot core data service is not ready",
+        ) from None
+    return {
+        "status": "ok",
+        "service": "SciPilot API",
+        "dependencies": {"supabase": "ok"},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -3454,7 +3528,9 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
         file_path = str(paper.get("file_path") or "").strip()
         if not file_path:
             raise PermanentResearchJobError("论文没有可同步的 PDF 文件")
-        update_research_job_progress(job_id, 20)
+        update_research_job_progress(
+            job_id, 20, str(job.get("lease_owner") or "")
+        )
         try:
             content = database().storage.from_("papers").download(file_path)
         except Exception as exc:
@@ -3521,7 +3597,9 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
                 "status": "pending",
                 "error_message": None,
             }
-        update_research_job_progress(job_id, 50)
+        update_research_job_progress(
+            job_id, 50, str(job.get("lease_owner") or "")
+        )
         sync_state = _complete_paper_knowledge_sync(
             paper=paper,
             content=content,
@@ -3529,7 +3607,9 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
             mapping=mapping,
             raise_on_failure=True,
         )
-        update_research_job_progress(job_id, 90)
+        update_research_job_progress(
+            job_id, 90, str(job.get("lease_owner") or "")
+        )
         return {"paper_id": paper_id, "knowledge_sync": sync_state}
     if job_type in {
         "research-decomposition",
@@ -3543,7 +3623,9 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(input_data, dict):
             raise PermanentResearchJobError("任务输入格式无效")
         user = SimpleNamespace(id=user_id)
-        update_research_job_progress(job_id, 10)
+        update_research_job_progress(
+            job_id, 10, str(job.get("lease_owner") or "")
+        )
         try:
             if job_type == "research-decomposition":
                 result = decompose_research(
@@ -3582,7 +3664,9 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
             raise
         except (TypeError, ValueError) as exc:
             raise PermanentResearchJobError("任务输入格式无效") from exc
-        update_research_job_progress(job_id, 90)
+        update_research_job_progress(
+            job_id, 90, str(job.get("lease_owner") or "")
+        )
         return result
 
     if job_type != "paper-analysis":
@@ -3611,7 +3695,9 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
     if not file_path:
         raise PermanentResearchJobError("论文任务没有可读取的 PDF 文件")
 
-    update_research_job_progress(job_id, 10)
+    update_research_job_progress(
+        job_id, 10, str(job.get("lease_owner") or "")
+    )
     try:
         content = database().storage.from_("papers").download(file_path)
     except Exception as exc:
@@ -3636,7 +3722,9 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
         job_id,
         len(extracted["text"]),
     )
-    update_research_job_progress(job_id, 35)
+    update_research_job_progress(
+        job_id, 35, str(job.get("lease_owner") or "")
+    )
     paper_agent = _pick_agent("paper")
     logger.info("Calling paper-reading Agent for durable job=%s", job_id)
     try:
@@ -3655,7 +3743,9 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
         fallback_authors=extracted["authors"],
         valid_pages={int(page["page"]) for page in extracted["pages"]},
     )
-    update_research_job_progress(job_id, 75)
+    update_research_job_progress(
+        job_id, 75, str(job.get("lease_owner") or "")
+    )
     sections = parsed_report["sections"]
     try:
         database().table("paper_reports").upsert(
@@ -3669,7 +3759,10 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
                 "content": {
                     "page_count": extracted["page_count"],
                     "extracted_page_count": extracted["extracted_page_count"],
+                    "extraction_method": extracted["extraction_method"],
+                    "ocr_page_count": extracted["ocr_page_count"],
                     "extraction_warnings": extracted["extraction_warnings"],
+                    "page_evidence": extracted["page_evidence"],
                     "source": "xunfei-paper-reading-agent",
                     "graph": parsed_report["graph"],
                 },
@@ -3691,6 +3784,8 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
                     "metadata": {
                         "page_count": extracted["page_count"],
                         "extracted_page_count": extracted["extracted_page_count"],
+                        "extraction_method": extracted["extraction_method"],
+                        "ocr_page_count": extracted["ocr_page_count"],
                         "extraction_warnings": extracted["extraction_warnings"],
                     },
                 }
@@ -3715,7 +3810,9 @@ def process_research_job(job: dict[str, Any]) -> dict[str, Any]:
         report=parsed_report,
     )
     _advance_project_stage(paper.get("project_id"), user_id, "literature")
-    update_research_job_progress(job_id, 90)
+    update_research_job_progress(
+        job_id, 90, str(job.get("lease_owner") or "")
+    )
     knowledge_sync, sync_mapping = _prepare_paper_knowledge_sync(
         paper=saved_paper,
         user_id=user_id,
@@ -4098,7 +4195,7 @@ async def upload_paper(
     fallback_title = Path(filename).stem
     logger.info("Starting PDF extraction for paper=%s", paper_id)
     try:
-        extracted = _extract_pdf_metadata(content, fallback_title)
+        extracted = await _extract_pdf_metadata_nonblocking(content, fallback_title)
     except PdfExtractionError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     logger.info(
@@ -4150,6 +4247,8 @@ async def upload_paper(
                     "metadata": {
                         "page_count": extracted["page_count"],
                         "extracted_page_count": extracted["extracted_page_count"],
+                        "extraction_method": extracted["extraction_method"],
+                        "ocr_page_count": extracted["ocr_page_count"],
                         "extraction_warnings": extracted["extraction_warnings"],
                     },
                 }
@@ -4171,7 +4270,10 @@ async def upload_paper(
             "content": {
                 "page_count": extracted["page_count"],
                 "extracted_page_count": extracted["extracted_page_count"],
+                "extraction_method": extracted["extraction_method"],
+                "ocr_page_count": extracted["ocr_page_count"],
                 "extraction_warnings": extracted["extraction_warnings"],
+                "page_evidence": extracted["page_evidence"],
                 "source": "xunfei-paper-reading-agent",
                 "graph": parsed_report["graph"],
             },
@@ -5058,7 +5160,23 @@ def list_evaluation_runs(
         .data
         or []
     )
-    return {"items": rows, "total": len(rows)}
+    suite_ids = list({str(row.get("suite_id") or "") for row in rows})
+    suite_rows = []
+    if suite_ids:
+        suite_rows = (
+            database()
+            .table("evaluation_suites")
+            .select("id,slug,version")
+            .in_("id", suite_ids)
+            .execute()
+            .data
+            or []
+        )
+    suite_metadata = {str(item["id"]): item for item in suite_rows}
+    return {
+        "items": attach_evaluation_trends(rows, suite_metadata),
+        "total": len(rows),
+    }
 
 
 @router.post(
@@ -5377,6 +5495,7 @@ def _public_knowledge_status(user_id: str) -> dict[str, Any]:
         "document_count": len(mappings),
         "vectored_count": vectored_count,
         "files": files,
+        "runtime": status.get("runtime"),
         "reason": (
             None
             if provider_ready and vectored_count > 0
@@ -5428,6 +5547,8 @@ def search_knowledge_base(
         "candidate_count": retrieval["candidate_count"],
         "rerank_mode": retrieval["rerank_mode"],
         "retrieval_degraded": retrieval["degraded"],
+        "degradation_hint": retrieval.get("degradation_hint"),
+        "runtime": retrieval.get("runtime"),
     }
 
 
@@ -5486,6 +5607,15 @@ def answer_from_knowledge_base(
         "candidate_count": retrieval["candidate_count"],
         "rerank_mode": retrieval["rerank_mode"],
         "retrieval_degraded": retrieval["degraded"],
+        "degradation_hint": retrieval.get("degradation_hint"),
+        "runtime": {
+            "retrieval": retrieval.get("runtime"),
+            "model": (
+                model_result.get("runtime")
+                if citations and status.get("available")
+                else None
+            ),
+        },
     }
 
 
@@ -5689,6 +5819,10 @@ def dashboard_chat(
         citation_validation=citation_validation,
     )
     elapsed_ms = round((perf_counter() - started) * 1000)
+    external_run = model_result.get("runtime")
+    provider_recovered = bool(
+        isinstance(external_run, dict) and external_run.get("degraded")
+    )
     run = _record_ai_run(
         user_id=str(user.id),
         conversation_id=(conversation_id if not persistence_unavailable else None),
@@ -5700,6 +5834,7 @@ def dashboard_chat(
             "degraded"
             if knowledge_unavailable
             or citation_validation["status"] in {"invalid", "unsupported"}
+            or provider_recovered
             else "succeeded"
         ),
         response_mode="dashboard-model-chat",
@@ -5708,6 +5843,8 @@ def dashboard_chat(
             if knowledge_unavailable
             else "citation-validation-failed"
             if citation_validation["status"] in {"invalid", "unsupported"}
+            else "provider-recovered-after-retry"
+            if provider_recovered
             else None
         ),
         retrieval_count=len(citations),
@@ -5733,6 +5870,13 @@ def dashboard_chat(
         "model": status.get("model"),
         "knowledge_used": bool(citations),
         "knowledge_unavailable": knowledge_unavailable,
+        "degradation_hint": (
+            "知识库暂时不可用，本次回答未使用论文检索证据"
+            if knowledge_unavailable
+            else "模型服务短暂波动，已自动重试并恢复"
+            if provider_recovered
+            else None
+        ),
         "conversation_id": conversation_id,
         "message_id": message_id,
         "persistence_unavailable": persistence_unavailable,
@@ -6710,6 +6854,7 @@ def _complete_sandboxed_experiment_run(
 def _process_experiment_execution_job(job: dict[str, Any]) -> dict[str, Any]:
     job_id = str(job["id"])
     user_id = str(job["user_id"])
+    lease_owner = str(job.get("lease_owner") or "")
     input_data = job.get("input")
     run_id = (
         str(input_data.get("experiment_run_id") or "")
@@ -6738,6 +6883,9 @@ def _process_experiment_execution_job(job: dict[str, Any]) -> dict[str, Any]:
     if not repo_url:
         raise PermanentResearchJobError("代码复现产物缺少公开仓库地址")
 
+    # Fence the business record behind the active research-job lease. A stale
+    # worker must not move the experiment out of the planned state.
+    update_research_job_progress(job_id, 10, lease_owner)
     started_at = datetime.now(timezone.utc).isoformat()
     started = (
         database()
@@ -6751,15 +6899,21 @@ def _process_experiment_execution_job(job: dict[str, Any]) -> dict[str, Any]:
     if not started.data:
         raise PermanentResearchJobError("实验运行状态已变化")
     run = started.data[0]
-    update_research_job_progress(job_id, 15)
+    update_research_job_progress(job_id, 15, lease_owner)
 
     try:
         execution = execute_repository_run(
             repo_url=repo_url,
             commit_sha=str(run.get("commit_sha") or ""),
             command=str(run.get("command") or ""),
+            execution_environment=(
+                run.get("environment")
+                if isinstance(run.get("environment"), dict)
+                else {}
+            ),
         )
     except (SandboxCommandError, SandboxConfigurationError) as exc:
+        update_research_job_progress(job_id, 80, lease_owner)
         updated = _complete_sandboxed_experiment_run(
             run=run,
             user_id=user_id,
@@ -6768,10 +6922,13 @@ def _process_experiment_execution_job(job: dict[str, Any]) -> dict[str, Any]:
             stderr_excerpt=str(exc),
             environment={"executor": "docker", "network": "none"},
         )
-        update_research_job_progress(job_id, 90)
+        update_research_job_progress(job_id, 90, lease_owner)
         return {"experiment_run_id": run_id, "status": updated["status"]}
 
     status = "succeeded" if execution.exit_code == 0 else "failed"
+    # The Docker call may span many heartbeat intervals. Re-check ownership
+    # before persisting any captured output or terminal experiment state.
+    update_research_job_progress(job_id, 75, lease_owner)
     output_files = execution.output_files
     capture_warning = None
     if status == "succeeded" and execution.captured_files:
@@ -6784,6 +6941,7 @@ def _process_experiment_execution_job(job: dict[str, Any]) -> dict[str, Any]:
     environment = dict(execution.environment)
     if capture_warning:
         environment["result_capture_warning"] = capture_warning
+    update_research_job_progress(job_id, 85, lease_owner)
     updated = _complete_sandboxed_experiment_run(
         run=run,
         user_id=user_id,
@@ -6794,7 +6952,7 @@ def _process_experiment_execution_job(job: dict[str, Any]) -> dict[str, Any]:
         output_files=output_files,
         environment=environment,
     )
-    update_research_job_progress(job_id, 90)
+    update_research_job_progress(job_id, 90, lease_owner)
     record_activity(
         user_id,
         "experiment",
@@ -7002,7 +7160,8 @@ def create_experiment_run(
             )
         try:
             parse_approved_command(payload.command)
-        except SandboxCommandError as exc:
+            validate_execution_environment(payload.environment)
+        except (SandboxCommandError, SandboxConfigurationError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
     run_values = {
         "user_id": user_id,

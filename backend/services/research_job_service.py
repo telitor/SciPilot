@@ -26,6 +26,10 @@ class PermanentResearchJobError(RuntimeError):
     """An invalid job input that should not consume additional retries."""
 
 
+class ResearchJobLeaseLost(RuntimeError):
+    """The worker no longer owns a claimed job and must not mutate it."""
+
+
 def _database():
     return get_supabase_client()
 
@@ -217,20 +221,54 @@ def claim_research_job(worker_id: str, lease_seconds: int) -> dict[str, Any] | N
     return _first(result)
 
 
-def update_research_job_progress(job_id: str, progress: int) -> None:
-    (
+def renew_research_job_lease(
+    job_id: str,
+    worker_id: str,
+    lease_seconds: int,
+) -> bool:
+    """Extend an owned running lease so long external/GPU work is not reclaimed."""
+
+    bounded_seconds = max(30, min(int(lease_seconds), 900))
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(seconds=bounded_seconds)
+    ).isoformat()
+    result = (
+        _database()
+        .table("research_jobs")
+        .update({"lease_expires_at": expires_at})
+        .eq("id", job_id)
+        .eq("status", "running")
+        .eq("lease_owner", worker_id)
+        .execute()
+    )
+    return bool(getattr(result, "data", None))
+
+
+def update_research_job_progress(
+    job_id: str,
+    progress: int,
+    lease_owner: str,
+) -> None:
+    result = (
         _database()
         .table("research_jobs")
         .update({"progress": max(0, min(99, progress))})
         .eq("id", job_id)
         .eq("status", "running")
+        .eq("lease_owner", lease_owner)
         .execute()
     )
+    if not _first(result):
+        raise ResearchJobLeaseLost(f"Research job lease lost: {job_id}")
 
 
-def complete_research_job(job_id: str, result_data: dict[str, Any]) -> None:
+def complete_research_job(
+    job_id: str,
+    result_data: dict[str, Any],
+    lease_owner: str,
+) -> None:
     now = datetime.now(timezone.utc).isoformat()
-    (
+    result = (
         _database()
         .table("research_jobs")
         .update(
@@ -246,8 +284,11 @@ def complete_research_job(job_id: str, result_data: dict[str, Any]) -> None:
         )
         .eq("id", job_id)
         .eq("status", "running")
+        .eq("lease_owner", lease_owner)
         .execute()
     )
+    if not _first(result):
+        raise ResearchJobLeaseLost(f"Research job lease lost: {job_id}")
 
 
 def _safe_error_message(exc: Exception) -> str:
@@ -272,7 +313,9 @@ def _error_code(exc: Exception) -> str:
 
 
 def record_research_job_failure(
-    job: dict[str, Any], exc: Exception
+    job: dict[str, Any],
+    exc: Exception,
+    lease_owner: str,
 ) -> dict[str, Any]:
     attempts = int(job.get("attempts") or 0)
     max_attempts = int(job.get("max_attempts") or 3)
@@ -296,9 +339,13 @@ def record_research_job_failure(
         .update(updates)
         .eq("id", job["id"])
         .eq("status", "running")
+        .eq("lease_owner", lease_owner)
         .execute()
     )
-    return _first(result) or {**job, **updates}
+    failed_job = _first(result)
+    if not failed_job:
+        raise ResearchJobLeaseLost(f"Research job lease lost: {job['id']}")
+    return failed_job
 
 
 async def _wait_or_stop(stop_event: asyncio.Event, seconds: float) -> None:
@@ -306,6 +353,43 @@ async def _wait_or_stop(stop_event: asyncio.Event, seconds: float) -> None:
         await asyncio.wait_for(stop_event.wait(), timeout=seconds)
     except asyncio.TimeoutError:
         pass
+
+
+async def _renew_lease_until_done(
+    *,
+    job_id: str,
+    worker_id: str,
+    lease_seconds: int,
+    done_event: asyncio.Event,
+    lease_lost_event: asyncio.Event,
+) -> None:
+    """Renew a job lease in the background until its processor finishes."""
+
+    interval = max(15.0, min(lease_seconds / 3, 120.0))
+    while not done_event.is_set():
+        try:
+            await asyncio.wait_for(done_event.wait(), timeout=interval)
+            return
+        except asyncio.TimeoutError:
+            pass
+        try:
+            renewed = await asyncio.to_thread(
+                renew_research_job_lease,
+                job_id,
+                worker_id,
+                lease_seconds,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Research job lease renewal failed job_id=%s error=%s",
+                job_id,
+                type(exc).__name__,
+            )
+            continue
+        if not renewed:
+            logger.error("Research job lease ownership was lost job_id=%s", job_id)
+            lease_lost_event.set()
+            return
 
 
 async def run_research_job_worker(
@@ -339,13 +423,30 @@ async def run_research_job_worker(
             await _wait_or_stop(stop_event, poll_seconds)
             continue
 
+        job_id = str(job["id"])
+        processing_done = asyncio.Event()
+        lease_lost = asyncio.Event()
+        heartbeat_task = asyncio.create_task(
+            _renew_lease_until_done(
+                job_id=job_id,
+                worker_id=worker_id,
+                lease_seconds=lease_seconds,
+                done_event=processing_done,
+                lease_lost_event=lease_lost,
+            )
+        )
         try:
             result_data = await asyncio.to_thread(processor, job)
+            if lease_lost.is_set():
+                raise ResearchJobLeaseLost(f"Research job lease lost: {job_id}")
             await asyncio.to_thread(
                 complete_research_job,
-                str(job["id"]),
+                job_id,
                 result_data,
+                worker_id,
             )
+        except ResearchJobLeaseLost:
+            logger.warning("Research job lease lost; stale result discarded job_id=%s", job_id)
         except Exception as exc:
             logger.warning(
                 "Research job failed job_type=%s attempt=%s error=%s",
@@ -353,11 +454,26 @@ async def run_research_job_worker(
                 job.get("attempts"),
                 type(exc).__name__,
             )
-            failed_job = await asyncio.to_thread(record_research_job_failure, job, exc)
+            try:
+                failed_job = await asyncio.to_thread(
+                    record_research_job_failure,
+                    job,
+                    exc,
+                    worker_id,
+                )
+            except ResearchJobLeaseLost:
+                logger.warning(
+                    "Research job lease lost; stale failure discarded job_id=%s",
+                    job_id,
+                )
+                continue
             if (
                 failed_job.get("status") == "failed"
                 and terminal_failure_handler is not None
             ):
                 await asyncio.to_thread(terminal_failure_handler, failed_job, exc)
+        finally:
+            processing_done.set()
+            await heartbeat_task
 
     logger.info("Research job worker stopped worker_id=%s", worker_id)

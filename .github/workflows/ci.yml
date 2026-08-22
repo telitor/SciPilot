@@ -67,3 +67,50 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Run browser smoke tests
         run: npm run test:e2e
+
+  deployment-containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate production deployment preflight without external calls
+        run: |
+          cp deploy/.env.example deploy/.env.preflight
+          chmod 600 deploy/.env.preflight
+          sed -i 's|^CORS_ORIGINS=.*|CORS_ORIGINS=https://ci.scipilot.internal|' deploy/.env.preflight
+          sed -i 's|^PASSWORD_RESET_REDIRECT_URL=.*|PASSWORD_RESET_REDIRECT_URL=https://ci.scipilot.internal/reset-password|' deploy/.env.preflight
+          sed -i 's|^SUPABASE_URL=.*|SUPABASE_URL=https://ci-supabase.internal|' deploy/.env.preflight
+          sed -i 's|^SUPABASE_PUBLISHABLE_KEY=.*|SUPABASE_PUBLISHABLE_KEY=ci-publishable-key|' deploy/.env.preflight
+          sed -i 's|^SUPABASE_SECRET_KEY=.*|SUPABASE_SECRET_KEY=ci-secret-key|' deploy/.env.preflight
+          python deploy/manage.py --env-file deploy/.env.preflight preflight --tag "ci-${GITHUB_SHA::12}"
+      - name: Prepare isolated CI runtime configuration
+        run: |
+          cp deploy/.env.example deploy/.env
+          sed -i "s/^SCIPILOT_IMAGE_TAG=.*/SCIPILOT_IMAGE_TAG=ci-${GITHUB_SHA::12}/" deploy/.env
+          sed -i 's/^SCIPILOT_PUBLIC_PORT=.*/SCIPILOT_PUBLIC_PORT=18080/' deploy/.env
+          sed -i 's/^SCIPILOT_ENV=.*/SCIPILOT_ENV=local/' deploy/.env
+          sed -i 's/^LOCAL_DEMO_MODE=.*/LOCAL_DEMO_MODE=true/' deploy/.env
+          sed -i 's/^LOCAL_DEMO_PASSWORD=.*/LOCAL_DEMO_PASSWORD=ci-only-local-password/' deploy/.env
+          sed -i 's/^RESEARCH_JOB_WORKER_ENABLED=.*/RESEARCH_JOB_WORKER_ENABLED=false/' deploy/.env
+      - name: Validate Compose model
+        run: docker compose --env-file deploy/.env --file deploy/compose.yaml config --quiet
+      - name: Build production images
+        run: docker compose --env-file deploy/.env --file deploy/compose.yaml build
+      - name: Verify production OCR runtime
+        run: |
+          docker compose --env-file deploy/.env --file deploy/compose.yaml run --rm --no-deps backend tesseract --version
+          docker compose --env-file deploy/.env --file deploy/compose.yaml run --rm --no-deps backend pdftoppm -v
+      - name: Start and wait for container health
+        run: docker compose --env-file deploy/.env --file deploy/compose.yaml up --detach --wait --wait-timeout 180
+      - name: Verify frontend and proxied backend
+        run: |
+          curl --fail --silent --show-error http://127.0.0.1:18080/healthz | grep '"status":"ok"'
+          curl --fail --silent --show-error http://127.0.0.1:18080/api/v1/health | grep '"status":"ok"'
+      - name: Show bounded container logs on failure
+        if: failure()
+        run: docker compose --env-file deploy/.env --file deploy/compose.yaml logs --tail 200
+      - name: Stop deployment smoke stack
+        if: always()
+        run: docker compose --env-file deploy/.env --file deploy/compose.yaml down --remove-orphans

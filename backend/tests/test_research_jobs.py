@@ -1,7 +1,8 @@
+import asyncio
 import unittest
 from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from fastapi import HTTPException, UploadFile
 
@@ -34,6 +35,21 @@ class ResearchJobServiceTests(unittest.TestCase):
         self.assertIn(call("id", "job-1"), query.eq.call_args_list)
         self.assertIn(call("user_id", "user-1"), query.eq.call_args_list)
 
+    def test_lease_renewal_is_scoped_to_running_job_and_worker(self):
+        service, query = service_with_rows([{"id": "job-1", "status": "running"}])
+        with patch.object(research_job_service, "_database", return_value=service):
+            renewed = research_job_service.renew_research_job_lease(
+                "job-1",
+                "worker-1",
+                600,
+            )
+
+        self.assertTrue(renewed)
+        self.assertIn(call("id", "job-1"), query.eq.call_args_list)
+        self.assertIn(call("status", "running"), query.eq.call_args_list)
+        self.assertIn(call("lease_owner", "worker-1"), query.eq.call_args_list)
+        self.assertIn("lease_expires_at", query.update.call_args.args[0])
+
     def test_transient_failure_is_requeued_before_attempt_limit(self):
         service, query = service_with_rows(
             [{"id": "job-1", "status": "pending", "attempts": 1, "max_attempts": 3}]
@@ -44,6 +60,7 @@ class ResearchJobServiceTests(unittest.TestCase):
             result = research_job_service.record_research_job_failure(
                 job,
                 RuntimeError("provider secret must not be exposed"),
+                "worker-1",
             )
 
         updates = query.update.call_args.args[0]
@@ -51,6 +68,7 @@ class ResearchJobServiceTests(unittest.TestCase):
         self.assertEqual(updates["error_message"], "任务执行失败，请稍后重试")
         self.assertEqual(updates["result"]["error_code"], "internal_error")
         self.assertEqual(result["status"], "pending")
+        self.assertIn(call("lease_owner", "worker-1"), query.eq.call_args_list)
 
     def test_permanent_failure_stops_retrying(self):
         service, query = service_with_rows(
@@ -62,6 +80,7 @@ class ResearchJobServiceTests(unittest.TestCase):
             research_job_service.record_research_job_failure(
                 job,
                 research_job_service.PermanentResearchJobError("扫描版 PDF 无法解析"),
+                "worker-1",
             )
 
         updates = query.update.call_args.args[0]
@@ -69,6 +88,31 @@ class ResearchJobServiceTests(unittest.TestCase):
         self.assertEqual(updates["error_message"], "扫描版 PDF 无法解析")
         self.assertEqual(updates["result"]["error_code"], "invalid_input")
         self.assertIsNotNone(updates["completed_at"])
+
+    def test_stale_worker_cannot_update_progress_or_finish_job(self):
+        service, query = service_with_rows([])
+        with patch.object(research_job_service, "_database", return_value=service):
+            with self.assertRaises(research_job_service.ResearchJobLeaseLost):
+                research_job_service.update_research_job_progress(
+                    "job-1", 50, "stale-worker"
+                )
+            with self.assertRaises(research_job_service.ResearchJobLeaseLost):
+                research_job_service.complete_research_job(
+                    "job-1", {"ok": True}, "stale-worker"
+                )
+
+        self.assertIn(call("lease_owner", "stale-worker"), query.eq.call_args_list)
+
+    def test_stale_failure_does_not_fabricate_terminal_state(self):
+        service, _query = service_with_rows([])
+        job = {"id": "job-1", "attempts": 3, "max_attempts": 3, "status": "running"}
+        with patch.object(research_job_service, "_database", return_value=service):
+            with self.assertRaises(research_job_service.ResearchJobLeaseLost):
+                research_job_service.record_research_job_failure(
+                    job,
+                    RuntimeError("late failure"),
+                    "stale-worker",
+                )
 
     def test_retry_rejects_non_failed_job(self):
         with patch.object(
@@ -170,6 +214,72 @@ class ResearchJobServiceTests(unittest.TestCase):
         )
 
 
+class ResearchJobWorkerLeaseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_worker_keeps_heartbeat_until_processor_finishes(self):
+        stop_event = asyncio.Event()
+        job = {"id": "job-1", "job_type": "experiment-execution", "attempts": 1}
+
+        def processor(_job):
+            stop_event.set()
+            return {"ok": True}
+
+        async def heartbeat(**kwargs):
+            await kwargs["done_event"].wait()
+
+        with (
+            patch.object(research_job_service, "claim_research_job", return_value=job),
+            patch.object(research_job_service, "complete_research_job") as complete,
+            patch.object(
+                research_job_service,
+                "_renew_lease_until_done",
+                new=AsyncMock(side_effect=heartbeat),
+            ) as renew,
+        ):
+            await research_job_service.run_research_job_worker(
+                processor,
+                stop_event=stop_event,
+            )
+
+        complete.assert_called_once()
+        self.assertEqual(complete.call_args.args[:2], ("job-1", {"ok": True}))
+        self.assertTrue(complete.call_args.args[2])
+        renew.assert_awaited_once()
+        self.assertTrue(renew.await_args.kwargs["done_event"].is_set())
+
+    async def test_lost_lease_failure_does_not_trigger_terminal_handler(self):
+        stop_event = asyncio.Event()
+        job = {"id": "job-1", "job_type": "paper-analysis", "attempts": 3}
+        terminal_handler = MagicMock()
+
+        def processor(_job):
+            stop_event.set()
+            raise RuntimeError("late worker failure")
+
+        async def heartbeat(**kwargs):
+            await kwargs["done_event"].wait()
+
+        with (
+            patch.object(research_job_service, "claim_research_job", return_value=job),
+            patch.object(
+                research_job_service,
+                "record_research_job_failure",
+                side_effect=research_job_service.ResearchJobLeaseLost("lost"),
+            ),
+            patch.object(
+                research_job_service,
+                "_renew_lease_until_done",
+                new=AsyncMock(side_effect=heartbeat),
+            ),
+        ):
+            await research_job_service.run_research_job_worker(
+                processor,
+                stop_event=stop_event,
+                terminal_failure_handler=terminal_handler,
+            )
+
+        terminal_handler.assert_not_called()
+
+
 class ResearchJobRouteTests(unittest.TestCase):
     def test_public_job_payload_does_not_expose_internal_input_or_lease(self):
         payload = routes._public_research_job(
@@ -196,6 +306,45 @@ class ResearchJobRouteTests(unittest.TestCase):
                 }
             )
 
+    def test_stale_experiment_worker_is_fenced_before_run_state_changes(self):
+        job = {
+            "id": "job-1",
+            "user_id": "user-1",
+            "lease_owner": "stale-worker",
+            "job_type": "experiment-execution",
+            "input": {"experiment_run_id": "run-1"},
+        }
+        run = {
+            "id": "run-1",
+            "user_id": "user-1",
+            "execution_mode": "sandboxed-docker",
+            "execution_job_id": "job-1",
+            "status": "planned",
+            "code_artifact_id": "artifact-1",
+        }
+        artifact = {
+            "id": "artifact-1",
+            "artifact_type": "code-reproduction",
+            "content": {"repo_url": "https://github.com/example/repo.git"},
+        }
+        with (
+            patch.object(routes, "_owned_experiment_run", return_value=run),
+            patch.object(routes, "require_owned_row", return_value=artifact),
+            patch.object(
+                routes,
+                "update_research_job_progress",
+                side_effect=research_job_service.ResearchJobLeaseLost("lost"),
+            ) as progress,
+            patch.object(routes, "database") as database,
+            patch.object(routes, "execute_repository_run") as execute,
+        ):
+            with self.assertRaises(research_job_service.ResearchJobLeaseLost):
+                routes.process_research_job(job)
+
+        progress.assert_called_once_with("job-1", 10, "stale-worker")
+        database.assert_not_called()
+        execute.assert_not_called()
+
     def test_problem_decomposition_job_dispatches_to_existing_business_logic(self):
         expected = {"id": "artifact-1", "core_question": "topic"}
         with (
@@ -206,6 +355,7 @@ class ResearchJobRouteTests(unittest.TestCase):
                 {
                     "id": "job-1",
                     "user_id": "user-1",
+                    "lease_owner": "worker-1",
                     "job_type": "research-decomposition",
                     "input": {"direction": "topic"},
                 }
@@ -213,7 +363,10 @@ class ResearchJobRouteTests(unittest.TestCase):
 
         self.assertEqual(result, expected)
         self.assertEqual(handler.call_args.kwargs["user"].id, "user-1")
-        self.assertEqual(progress.call_args_list, [call("job-1", 10), call("job-1", 90)])
+        self.assertEqual(
+            progress.call_args_list,
+            [call("job-1", 10, "worker-1"), call("job-1", 90, "worker-1")],
+        )
 
     def test_paper_knowledge_sync_runs_as_durable_job(self):
         paper = {
@@ -245,6 +398,7 @@ class ResearchJobRouteTests(unittest.TestCase):
                     "id": "job-1",
                     "user_id": "user-1",
                     "paper_id": "paper-1",
+                    "lease_owner": "worker-1",
                     "job_type": "paper-knowledge-sync",
                     "input": {"paper_id": "paper-1"},
                 }
@@ -254,7 +408,11 @@ class ResearchJobRouteTests(unittest.TestCase):
         self.assertTrue(complete.call_args.kwargs["raise_on_failure"])
         self.assertEqual(
             progress.call_args_list,
-            [call("job-1", 20), call("job-1", 50), call("job-1", 90)],
+            [
+                call("job-1", 20, "worker-1"),
+                call("job-1", 50, "worker-1"),
+                call("job-1", 90, "worker-1"),
+            ],
         )
 
 

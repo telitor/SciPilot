@@ -1,15 +1,6 @@
-import { useCallback, useState, useMemo, useEffect } from 'react';
+import { lazy, Suspense, useCallback, useState, useMemo, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { BarChart3, TrendingUp, Download, FileSpreadsheet, Loader2, ArrowRight, FolderKanban, Plus, Trash2 } from 'lucide-react';
-import ReactECharts from 'echarts-for-react';
-import * as echarts from 'echarts/core';
-import { BarChart, LineChart } from 'echarts/charts';
-import {
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-} from 'echarts/components';
-import { CanvasRenderer } from 'echarts/renderers';
 import AgentKnowledgePanel from '@/components/AgentKnowledgePanel';
 import ArtifactReviewToolbar, { mergeArtifactDetail } from '@/components/ArtifactReviewToolbar';
 import ProjectContextBar from '@/components/ProjectContextBar';
@@ -21,8 +12,7 @@ import { useSelectedProjectId } from '@/store/projectStore';
 import { useUIStore } from '@/store/uiStore';
 import type { ExperimentRun, ResultAnalysis } from '@/types';
 
-// Register ECharts modules manually to avoid window.echarts dependency
-echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
+const ResultChart = lazy(() => import('@/components/charts/ResultChart'));
 
 function ResultAnalyze() {
   const selectedProjectId = useSelectedProjectId();
@@ -43,7 +33,6 @@ function ResultAnalyze() {
   const [draftAnalysis, setDraftAnalysis] = useState<ResultAnalysis | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [chartReady, setChartReady] = useState(false);
   const { addNotification } = useUIStore();
 
   const handleJobSucceeded = useCallback((result: ResultAnalysis) => {
@@ -57,7 +46,6 @@ function ResultAnalyze() {
       if (linkedRunId) localStorage.setItem(runStorageKey, linkedRunId);
       else localStorage.removeItem(runStorageKey);
     }
-    setChartReady(true);
     addNotification({ type: 'success', message: '数据分析完成', duration: 3000 });
   }, [addNotification, linkedRepoId, linkedRunId, runStorageKey, sourceStorageKey, storageKey]);
 
@@ -78,13 +66,6 @@ function ResultAnalyze() {
     onSucceeded: handleJobSucceeded,
     onFailed: handleJobFailed,
   });
-
-  // Ensure echarts is loaded before creating chart options
-  useEffect(() => {
-    // Small delay to ensure echarts-for-react is ready
-    const timer = setTimeout(() => setChartReady(true), 100);
-    return () => clearTimeout(timer);
-  }, []);
 
   useEffect(() => {
     setAnalysis(null);
@@ -118,7 +99,6 @@ function ResultAnalyze() {
             localStorage.setItem(storageKey, response.data.result_artifact_id as string);
             if (linkedRepoId) localStorage.setItem(sourceStorageKey, linkedRepoId);
             localStorage.setItem(runStorageKey, linkedRunId);
-            setChartReady(true);
           });
         }
         const firstAnalyzable = response.data.output_files.find(
@@ -234,7 +214,7 @@ function ResultAnalyze() {
   };
 
   const barChartOption = useMemo(() => {
-    if (!chartReady || !analysis?.stats.length) return null;
+    if (!analysis?.stats.length) return null;
     const labels = analysis.stats.map((item) => item.metric);
     const values = analysis.stats.map((item) => item.mean);
     return {
@@ -256,10 +236,17 @@ function ResultAnalyze() {
         data: values,
         type: 'bar' as const,
         itemStyle: {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: '#38bdf8' },
-            { offset: 1, color: '#2563eb' },
-          ]),
+          color: {
+            type: 'linear' as const,
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: '#38bdf8' },
+              { offset: 1, color: '#2563eb' },
+            ],
+          },
           borderRadius: [4, 4, 0, 0],
         },
         barWidth: '40%',
@@ -271,10 +258,10 @@ function ResultAnalyze() {
         textStyle: { color: '#f1f5f9' },
       },
     };
-  }, [analysis, chartReady]);
+  }, [analysis]);
 
   const lineChartOption = useMemo(() => {
-    if (!chartReady || !analysis?.stats.length) return null;
+    if (!analysis?.stats.length) return null;
     const labels = analysis.stats.map((item) => item.metric);
     return {
       backgroundColor: 'transparent',
@@ -300,10 +287,17 @@ function ResultAnalyze() {
           lineStyle: { color: '#38bdf8', width: 2 },
           itemStyle: { color: '#38bdf8' },
           areaStyle: {
-            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: 'rgba(56,189,248,0.2)' },
-              { offset: 1, color: 'rgba(56,189,248,0)' },
-            ]),
+            color: {
+              type: 'linear' as const,
+              x: 0,
+              y: 0,
+              x2: 0,
+              y2: 1,
+              colorStops: [
+                { offset: 0, color: 'rgba(56,189,248,0.2)' },
+                { offset: 1, color: 'rgba(56,189,248,0)' },
+              ],
+            },
           },
         },
         {
@@ -335,7 +329,7 @@ function ResultAnalyze() {
         textStyle: { color: '#f1f5f9' },
       },
     };
-  }, [analysis, chartReady]);
+  }, [analysis]);
 
   return (
     <div className="space-y-6 pb-20 md:pb-0">
@@ -471,7 +465,13 @@ function ResultAnalyze() {
               <div className="sci-card">
                 <h3 className="text-sm font-medium text-sci-muted mb-4">各数值字段均值</h3>
                 {barChartOption ? (
-                  <ReactECharts option={barChartOption} style={{ height: 250 }} />
+                  <Suspense fallback={(
+                    <div className="h-[250px] flex items-center justify-center text-sci-muted text-sm">
+                      图表加载中...
+                    </div>
+                  )}>
+                    <ResultChart option={barChartOption} />
+                  </Suspense>
                 ) : (
                   <div className="h-[250px] flex items-center justify-center text-sci-muted text-sm">
                     图表加载中...
@@ -481,7 +481,13 @@ function ResultAnalyze() {
               <div className="sci-card">
                 <h3 className="text-sm font-medium text-sci-muted mb-4">各字段范围与均值</h3>
                 {lineChartOption ? (
-                  <ReactECharts option={lineChartOption} style={{ height: 250 }} />
+                  <Suspense fallback={(
+                    <div className="h-[250px] flex items-center justify-center text-sci-muted text-sm">
+                      图表加载中...
+                    </div>
+                  )}>
+                    <ResultChart option={lineChartOption} />
+                  </Suspense>
                 ) : (
                   <div className="h-[250px] flex items-center justify-center text-sci-muted text-sm">
                     图表加载中...
