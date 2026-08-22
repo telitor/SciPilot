@@ -1,0 +1,42 @@
+SciPilot 源代码提交说明
+
+一、版本
+- 仓库：https://github.com/telitor/SciPilot
+- 分支：main
+- 本次打包提交：5b826a7
+- 打包日期：2026-08-22（Asia/Shanghai）
+
+二、包内范围
+- 包含 frontend、backend、supabase/migrations、deploy、Agent、模型微调、知识库接入客户端、工程文档和 CI 配置。
+- 排除 KnowledgeBase/Papers 下约 292 MB 的第三方论文原件；这些文件不是 SciPilot 自研代码，且是否可再分发须按论文版权逐项确认。
+- 排除仓库内 DOCX 历史报告。
+- 不包含 .env、API Key、Secret、访问令牌、远端知识库 ID、模型资源 ID、node_modules、Python 虚拟环境、构建输出、运行日志和用户数据。
+
+三、最小复现
+1. 安装 Python 3.11、Node.js 20+ 与 npm；如需生产部署，另装 Docker Engine 24+ / Compose v2.20+。
+2. 复制 backend/.env.example 为 backend/.env，仅在本地或部署平台填入真实配置，严禁提交。
+3. 后端：安装 backend/requirements.lock 或 requirements.txt 后运行 FastAPI。
+4. 前端：在 frontend 安装 package-lock.json 锁定依赖后运行 npm run dev。
+5. 生产：参见 deploy/README.md，先运行 deploy/manage.py preflight，再使用不可变 Git 标签发布和验证。
+
+四、验证命令
+- python -m unittest discover -s backend/tests -p "test_*.py" -v
+- npm --prefix frontend run type-check
+- npm --prefix frontend run lint
+- npm --prefix frontend run build
+- npm --prefix frontend run test:e2e
+- python backend/scripts/repository_quality_gate.py
+- git diff --check
+
+五、本轮本机结果
+- 后端：共运行 244 项，243 项通过，1 项因 Windows 符号链接权限跳过。
+- 前端类型检查：通过。
+- ESLint：通过。
+- 生产构建与 bundle 校验：通过。
+- 仓库门禁：通过，检查 323 个仓库文件、34 个迁移。
+- 浏览器 E2E：本轮未完成，外置 node_modules 缺少 @playwright/test；提交前须补齐依赖并重跑。
+
+六、ServiceID 与模型文件
+- 讯飞 MaaS 的 modelId、resourceId 以及星辰 Agent/ChatDoc 配置只应通过后端环境变量注入。
+- 提交给评审时可在受控附件中提供非秘密的 ServiceID/资源标识说明，但不得附带 API Key/API Secret。
+- 团队提交前补录：模型服务卡片截图编号、有效期和负责人；截图必须遮挡全部认证信息。
